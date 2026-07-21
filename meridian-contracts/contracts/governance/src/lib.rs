@@ -1,7 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, Symbol, IntoVal};
 use stellar_insured_lib::{Proposal, GovernanceAction, GovernanceError};
+use stellar_insured_lib::access_control::{self, AccessControlRole};
 
 #[contracttype]
 #[derive(Clone)]
@@ -38,10 +39,6 @@ pub struct ProposalStats {
 }
 
 // --- Storage helpers (#378: data access abstraction) ---
-
-fn get_admin(env: &Env) -> Address {
-    env.storage().instance().get(&DataKey::Admin).unwrap()
-}
 
 fn get_voting_period(env: &Env) -> u64 {
     env.storage().instance().get(&DataKey::VotingPeriod).unwrap()
@@ -87,12 +84,18 @@ impl GovernanceContract {
         env.storage().instance().set(&DataKey::ClaimsContract, &claims_contract);
         env.storage().instance().set(&DataKey::RiskPoolContract, &risk_pool_contract);
         env.storage().instance().set(&DataKey::PolicyContract, &policy_contract);
+        access_control::init_access_control(&env, &admin);
 
         // #379: emit event for initialization
         env.events().publish(
             (symbol_short!("admin"), symbol_short!("init")),
             admin,
         );
+        Ok(())
+    }
+
+    pub fn set_role(env: Env, addr: Address, role: AccessControlRole) -> Result<(), GovernanceError> {
+        access_control::set_role(&env, &env.current_contract_address(), &addr, role);
         Ok(())
     }
 
@@ -220,7 +223,7 @@ impl GovernanceContract {
         env.storage().persistent().set(&DataKey::GovernanceActionPending(counter), &action);
 
         env.events().publish(
-            (symbol_short!("gov"), symbol_short!("claim_prop")),
+            (symbol_short!("gov"), symbol_short!("claim_pr")),
             (counter, claim_id, creator),
         );
 
@@ -265,7 +268,7 @@ impl GovernanceContract {
         set_proposal(&env, counter, &proposal);
 
         // Store the governance action
-        let action = GovernanceAction::FundAllocation(recipient, amount);
+        let action = GovernanceAction::FundAllocation(recipient.clone(), amount);
         env.storage().persistent().set(&DataKey::GovernanceActionPending(counter), &action);
 
         env.events().publish(
@@ -359,7 +362,7 @@ impl GovernanceContract {
                     env.invoke_contract::<()>(
                         &claims_contract,
                         &symbol_short!("approve"),
-                        (claim_id,).into(),
+                        soroban_sdk::vec![&env, claim_id.into_val(&env)],
                     );
                 }
                 GovernanceAction::FundAllocation(recipient, amount) => {
@@ -369,7 +372,7 @@ impl GovernanceContract {
                     env.invoke_contract::<()>(
                         &risk_pool,
                         &symbol_short!("payout"),
-                        (recipient, amount).into(),
+                        soroban_sdk::vec![&env, recipient.into_val(&env), amount.into_val(&env)],
                     );
                 }
                 GovernanceAction::PolicyChange(policy_id) => {
@@ -379,7 +382,7 @@ impl GovernanceContract {
                     env.invoke_contract::<()>(
                         &policy_contract,
                         &symbol_short!("update"),
-                        (policy_id,).into(),
+                        soroban_sdk::vec![&env, policy_id.into_val(&env)],
                     );
                 }
             }
@@ -457,5 +460,45 @@ impl GovernanceContract {
 
     pub fn get_vote_record(env: Env, proposal_id: u64, voter: Address) -> Option<VoteRecord> {
         env.storage().persistent().get(&DataKey::VoterRecord(proposal_id, voter))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Env, Address};
+
+    fn setup() -> (Env, Address, Address) {
+        let env = Env::default();
+        let contract = env.register_contract(None, GovernanceContract);
+        let admin = Address::generate(&env);
+        let token = Address::generate(&env);
+        let slashing = Address::generate(&env);
+        let claims = Address::generate(&env);
+        let risk_pool = Address::generate(&env);
+        let policy = Address::generate(&env);
+        env.mock_all_auths();
+        env.as_contract(&contract, || {
+            GovernanceContract::initialize(
+                env.clone(),
+                admin.clone(),
+                token,
+                slashing,
+                1000,
+                claims,
+                risk_pool,
+                policy,
+            ).unwrap();
+        });
+        (env, contract, admin)
+    }
+
+    #[test]
+    fn test_initialize_sets_admin_role() {
+        let (env, contract, admin) = setup();
+        env.as_contract(&contract, || {
+            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
+        });
     }
 }

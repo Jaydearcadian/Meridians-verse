@@ -1,6 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, Symbol};
+use stellar_insured_lib::access_control::{self, AccessControlRole};
 
 // Maximum slashing history entries per (target, role) to prevent storage bloat (#380)
 const MAX_HISTORY: u32 = 50;
@@ -38,14 +39,6 @@ pub struct SlashingRecord {
 
 // --- Storage helpers (#378: data access abstraction) ---
 
-fn get_admin(env: &Env) -> Address {
-    env.storage().instance().get(&DataKey::Admin).unwrap()
-}
-
-fn get_governance(env: &Env) -> Address {
-    env.storage().instance().get(&DataKey::Governance).unwrap()
-}
-
 fn is_paused(env: &Env) -> bool {
     env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
 }
@@ -82,16 +75,21 @@ impl SlashingContract {
         env.storage().instance().set(&DataKey::RiskPool, &risk_pool);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::SlashableRoles, &Vec::<Symbol>::new(&env));
-        
+        access_control::init_access_control(&env, &admin);
+
         env.events().publish(
             (symbol_short!("slash"), symbol_short!("init")),
             (admin, governance, risk_pool),
         );
     }
 
+    pub fn set_role(env: Env, addr: Address, role: AccessControlRole) {
+        access_control::set_role(&env, &env.current_contract_address(), &addr, role);
+    }
+
     pub fn configure_penalty_parameters(env: Env, role: Symbol, params: PenaltyParams) {
-        let admin = get_admin(&env);
-        admin.require_auth();
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
 
         env.storage().persistent().set(&DataKey::PenaltyParams(role.clone()), &params);
         
@@ -108,8 +106,8 @@ impl SlashingContract {
     }
 
     pub fn slash_funds(env: Env, target: Address, role: Symbol, reason: String, amount: i128) {
-        let governance = get_governance(&env);
-        governance.require_auth();
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Governance);
 
         if is_paused(&env) {
             panic!("Contract paused");
@@ -151,8 +149,8 @@ impl SlashingContract {
     }
 
     pub fn add_slashable_role(env: Env, role: Symbol) {
-        let admin = get_admin(&env);
-        admin.require_auth();
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
 
         let mut roles = get_slashable_roles(&env);
         if !roles.contains(role.clone()) {
@@ -173,8 +171,8 @@ impl SlashingContract {
     }
 
     pub fn remove_slashable_role(env: Env, role: Symbol) {
-        let admin = get_admin(&env);
-        admin.require_auth();
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
 
         let roles = get_slashable_roles(&env);
         let mut new_roles = Vec::new(&env);
@@ -198,8 +196,8 @@ impl SlashingContract {
     }
 
     pub fn pause(env: Env) {
-        let admin = get_admin(&env);
-        admin.require_auth();
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
         env.storage().instance().set(&DataKey::Paused, &true);
         
         env.events().publish(
@@ -215,8 +213,8 @@ impl SlashingContract {
     }
 
     pub fn unpause(env: Env) {
-        let admin = get_admin(&env);
-        admin.require_auth();
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
         env.storage().instance().set(&DataKey::Paused, &false);
         
         env.events().publish(
@@ -258,5 +256,52 @@ impl SlashingContract {
         }
 
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Env, Address};
+
+    fn setup() -> (Env, Address, Address, Address) {
+        let env = Env::default();
+        let contract = env.register_contract(None, SlashingContract);
+        let admin = Address::generate(&env);
+        let governance = Address::generate(&env);
+        let risk_pool = Address::generate(&env);
+        env.mock_all_auths();
+        env.as_contract(&contract, || {
+            SlashingContract::initialize(env.clone(), admin.clone(), governance.clone(), risk_pool);
+        });
+        (env, contract, admin, governance)
+    }
+
+    #[test]
+    fn test_initialize_sets_roles() {
+        let (env, contract, admin, governance) = setup();
+        env.as_contract(&contract, || {
+            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
+            // Governance address is stored but role must be granted separately via set_role
+            assert!(!access_control::has_role(&env, &governance, &AccessControlRole::Governance));
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized")]
+    fn test_non_governance_slash_rejected() {
+        let (env, contract, _admin, _governance) = setup();
+        let attacker = Address::generate(&env);
+        let target = Address::generate(&env);
+        env.as_contract(&contract, || {
+            SlashingContract::slash_funds(
+                env.clone(),
+                target,
+                symbol_short!("test"),
+                String::from_str(&env, "reason"),
+                100,
+            );
+        });
     }
 }

@@ -1,25 +1,11 @@
 [workspace]
 members = [
     "contracts/lib",
-    "contracts/traits",
-    "contracts/proxy",
-    "contracts/escrow",
-    "contracts/ipfs-metadata",
-    "security-audit",
-    "contracts/oracle",
-    "contracts/bridge",
-    "contracts/property-token",
-    "contracts/insurance",
-    "contracts/analytics",
-    "contracts/fees",
-    "contracts/compliance_registry",
-    "contracts/fractional",
     "contracts/policy",
     "contracts/claims",
     "contracts/risk_pool",
     "contracts/governance",
     "contracts/slashing",
-    "tests",
 ]
 resolver = "2"
 
@@ -32,7 +18,7 @@ repository = "https://github.com/MettaChain/PropChain-contract"
 version = "1.0.0"
 
 [workspace.dependencies]
-soroban-sdk = "20.0.0"
+soroban-sdk = "=20.0.0"
 ink = "5.1.1"
 scale = { package = "parity-scale-codec", version = "3.7.5", default-features = false, features = ["derive"] }
 scale-info = { version = "2.10.0", default-features = false, features = ["derive"] }

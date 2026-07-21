@@ -17,9 +17,6 @@ pub enum DataKey {
     ReqCounter,
     TxCounter,
     Nonce(Address),
-    InboundNonce(u32, Address),
-    ProcessedMessage(BytesN<32>),
-    ConfirmationDepth,
 }
 
 /// Maximum bridge history entries retained per account (prevents unbounded growth).

@@ -15,7 +15,7 @@ soroban-sdk = { workspace = true }
 [lib]
 name = "propchain_bridge"
 path = "src/lib.rs"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib"]
 
 [features]
 default = ["std"]
