@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
-use stellar_insured_lib::RiskPoolError;
+use stellar_insured_lib::PoolStats;
 
 #[contracttype]
 #[derive(Clone)]
@@ -13,14 +13,6 @@ pub enum DataKey {
     AvailableCapital,
     ClaimsPaid,
     ProviderStake(Address),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PoolStats {
-    pub total_capital: i128,
-    pub available_capital: i128,
-    pub total_claims_paid: i128,
 }
 
 // --- Storage helpers (#378: data access abstraction) ---
@@ -170,7 +162,18 @@ impl RiskPoolContract {
             total_capital: get_total_capital(&env),
             available_capital: get_available_capital(&env),
             total_claims_paid: env.storage().instance().get(&DataKey::ClaimsPaid).unwrap_or(0),
+            provider_count: 0,
         }
+    }
+
+    // Short-name alias used by claims contract via cross-contract call
+    pub fn get_stats(env: Env) -> PoolStats {
+        Self::get_pool_stats(env)
+    }
+
+    // Short-name alias for payout_claim — matches symbol called by claims contract
+    pub fn payout(env: Env, recipient: Address, amount: i128) {
+        Self::payout_claim(env, recipient, amount)
     }
 
     pub fn get_provider_info(env: Env, provider: Address) -> i128 {

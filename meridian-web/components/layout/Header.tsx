@@ -2,14 +2,33 @@
 
 import Link from 'next/link';
 import { Menu, X } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { useActiveSection } from '@/hooks/useActiveSection';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 export function Header() {
   const [isOpen, setIsOpen] = useState(false);
   const activeSection = useActiveSection();
+  const isMobile = useIsMobile();
+
+  useEffect(() => {
+    if (!isMobile && isOpen) {
+      setIsOpen(false);
+    }
+  }, [isMobile, isOpen]);
+
+  useEffect(() => {
+    if (isOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [isOpen]);
 
   const isActive = (id: string) => activeSection === id;
   const baseNavClassName =

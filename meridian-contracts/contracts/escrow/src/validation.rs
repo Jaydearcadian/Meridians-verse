@@ -21,9 +21,11 @@ pub fn require_not_paused(env: &Env) -> Result<(), ValidationError> {
 }
 
 /// Checks if `address` is zero (all bytes zero) and returns an error if so.
-pub fn require_non_zero_address(env: &Env, address: &Address) -> Result<(), ValidationError> {
-    let zero_str = soroban_sdk::String::from_str(env, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHf");
-    if *address == Address::from_string(&zero_str) {
+pub fn require_non_zero_address(address: &Address) -> Result<(), ValidationError> {
+    // Create a zero address using from_account_id with a zero array
+    let zero_bytes = [0u8; 32];
+    let zero_addr = Address::from_contract_id(&zero_bytes);
+    if address == &zero_addr {
         return Err(ValidationError::ZeroAddress);
     }
     Ok(())

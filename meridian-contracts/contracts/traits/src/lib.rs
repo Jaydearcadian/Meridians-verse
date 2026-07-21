@@ -786,28 +786,19 @@ pub trait PropertyTokenOwnership {
 // =============================================================================
 
 /// Trait for contract data migration
-#[ink::trait_definition]
 pub trait DataMigration {
-    /// Error type for migration operations
-    type Error;
-
     /// Pause the contract for migration
-    #[ink(message)]
-    fn pause_for_migration(&mut self) -> Result<(), Self::Error>;
+    fn pause_for_migration(&mut self) -> Result<(), OracleError>;
 
     /// Unpause the contract after migration
-    #[ink(message)]
-    fn resume_after_migration(&mut self) -> Result<(), Self::Error>;
+    fn resume_after_migration(&mut self) -> Result<(), OracleError>;
 
     /// Extract a chunk of data for migration (generic byte representation)
-    #[ink(message)]
-    fn extract_data_chunk(&self, chunk_id: u32, start_index: u32, count: u32) -> Result<Vec<u8>, Self::Error>;
+    fn extract_data_chunk(&self, chunk_id: u32, start_index: u32, count: u32) -> Result<Vec<u8>, OracleError>;
 
     /// Initialize the contract with migrated data
-    #[ink(message)]
-    fn initialize_with_migrated_data(&mut self, data: Vec<u8>) -> Result<(), Self::Error>;
+    fn initialize_with_migrated_data(&mut self, data: Vec<u8>) -> Result<(), OracleError>;
 
     /// Verify the migrated data integrity
-    #[ink(message)]
-    fn verify_migration(&self) -> Result<bool, Self::Error>;
+    fn verify_migration(&self) -> Result<bool, OracleError>;
 }

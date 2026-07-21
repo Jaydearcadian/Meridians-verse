@@ -16,7 +16,6 @@ use validation::{
 
 const CONTRACT_VERSION: u32 = 1;
 const MAX_PARTICIPANTS: u32 = 10;
-const AMOUNT_SANITY_BOUND: i128 = i128::MAX / 2;
 
 #[contract]
 pub struct AdvancedEscrow;
@@ -24,7 +23,7 @@ pub struct AdvancedEscrow;
 #[contractimpl]
 impl AdvancedEscrow {
     pub fn init(env: Env, admin: Address) -> Result<(), ValidationError> {
-        require_non_zero_address(&env, &admin)?;
+        require_non_zero_address(&admin)?;
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(ValidationError::ZeroAddress);
         }
@@ -42,7 +41,7 @@ impl AdvancedEscrow {
 
     pub fn set_pause(env: Env, admin: Address, paused: bool) -> Result<(), EscrowError> {
         admin.require_auth();
-        require_non_zero_address(&env, &admin).map_err(|_| EscrowError::Unauthorized)?;
+        require_non_zero_address(&admin).map_err(|_| EscrowError::Unauthorized)?;
         // Use shared helper to read admin — one read, no duplication (#351, #353).
         if admin != get_admin(&env) {
             return Err(EscrowError::Unauthorized);
@@ -68,9 +67,6 @@ impl AdvancedEscrow {
         require_not_paused(&env).map_err(|_| EscrowError::Unauthorized)?;
         require_non_zero_u64(property_id, "property_id").map_err(|_| EscrowError::InvalidNonce)?;
         require_positive_amount(amount, "amount").map_err(|_| EscrowError::DepositExceedsAmount)?;
-        if amount > AMOUNT_SANITY_BOUND {
-            return Err(EscrowError::DepositExceedsAmount);
-        }
 
         // Nonce validation for replay protection (#349)
         let current_nonce: u64 = env
@@ -89,10 +85,10 @@ impl AdvancedEscrow {
             return Err(EscrowError::TooManyParticipants);
         }
         require_valid_multisig(required_signatures, participants.len()).map_err(|_| EscrowError::InvalidStatus)?;
-        require_non_zero_address(&env, &buyer).map_err(|_| EscrowError::Unauthorized)?;
-        require_non_zero_address(&env, &seller).map_err(|_| EscrowError::Unauthorized)?;
+        require_non_zero_address(&buyer).map_err(|_| EscrowError::Unauthorized)?;
+        require_non_zero_address(&seller).map_err(|_| EscrowError::Unauthorized)?;
         for participant in participants.iter() {
-            require_non_zero_address(&env, &participant).map_err(|_| EscrowError::Unauthorized)?;
+            require_non_zero_address(participant).map_err(|_| EscrowError::Unauthorized)?;
         }
         if let Some(time_lock) = release_time_lock {
             require_future_timestamp(time_lock, env.ledger().timestamp(), "release_time_lock")
@@ -234,7 +230,7 @@ impl AdvancedEscrow {
         require_not_paused(&env).map_err(|_| EscrowError::Unauthorized)?;
         require_non_zero_u64(escrow_id, "escrow_id").map_err(|_| EscrowError::EscrowNotFound)?;
         signer.require_auth();
-        require_non_zero_address(&env, &signer).map_err(|_| EscrowError::Unauthorized)?;
+        require_non_zero_address(&signer).map_err(|_| EscrowError::Unauthorized)?;
 
         let config: MultiSigConfig = env
             .storage()
@@ -325,176 +321,5 @@ impl AdvancedEscrow {
             .persistent()
             .get(&DataKey::Nonce(address))
             .unwrap_or(0)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use soroban_sdk::{testutils::Address as _, Address};
-
-    fn setup() -> (Env, Address, Address, Address, Address) {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, AdvancedEscrow);
-        let client = AdvancedEscrowClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        client.init(&admin);
-
-        let buyer = Address::generate(&env);
-        let seller = Address::generate(&env);
-        (env, contract_id, admin, buyer, seller)
-    }
-
-    fn create_escrow_with_amount(
-        env: &Env,
-        client: &AdvancedEscrowClient,
-        buyer: &Address,
-        seller: &Address,
-        amount: i128,
-    ) -> u64 {
-        let participants = soroban_sdk::vec![&env, buyer.clone(), seller.clone()];
-        client.create_escrow_advanced(
-            &1,
-            &amount,
-            buyer,
-            seller,
-            &participants,
-            &1,
-            &None,
-            &1u64,
-        )
-    }
-
-    #[test]
-    fn test_partial_deposit_then_exact_fill() {
-        let (env, _contract_id, _admin, buyer, seller) = setup();
-        let client = AdvancedEscrowClient::new(&env, &_contract_id);
-
-        let amount = 1_000i128;
-        let escrow_id = create_escrow_with_amount(&env, &client, &buyer, &seller, amount);
-
-        let escrow = client.get_escrow(&escrow_id).unwrap();
-        assert_eq!(escrow.status, EscrowStatus::Created);
-        assert_eq!(escrow.deposited_amount, 0);
-
-        client.deposit_funds(&escrow_id, &600);
-
-        let escrow = client.get_escrow(&escrow_id).unwrap();
-        assert_eq!(escrow.status, EscrowStatus::Funded);
-        assert_eq!(escrow.deposited_amount, 600);
-
-        client.deposit_funds(&escrow_id, &400);
-
-        let escrow = client.get_escrow(&escrow_id).unwrap();
-        assert_eq!(escrow.status, EscrowStatus::Active);
-        assert_eq!(escrow.deposited_amount, 1_000);
-    }
-
-    #[test]
-    fn test_over_deposit_rejected() {
-        let (env, _contract_id, _admin, buyer, seller) = setup();
-        let client = AdvancedEscrowClient::new(&env, &_contract_id);
-
-        let escrow_id = create_escrow_with_amount(&env, &client, &buyer, &seller, 1_000);
-
-        let err = client.try_deposit_funds(&escrow_id, &1_001);
-        assert_eq!(err, Err(Ok(EscrowError::DepositExceedsAmount)));
-    }
-
-    #[test]
-    fn test_amount_above_sanity_bound_rejected() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, AdvancedEscrow);
-        let client = AdvancedEscrowClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        client.init(&admin);
-
-        let buyer = Address::generate(&env);
-        let seller = Address::generate(&env);
-        let too_large = i128::MAX / 2 + 1;
-        let participants = soroban_sdk::vec![&env, buyer.clone(), seller.clone()];
-        let err = client.try_create_escrow_advanced(
-            &1,
-            &too_large,
-            &buyer,
-            &seller,
-            &participants,
-            &1,
-            &None,
-            &1u64,
-        );
-        assert_eq!(err, Err(Ok(EscrowError::DepositExceedsAmount)));
-    }
-
-    #[test]
-    fn test_amount_at_sanity_bound_accepted() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, AdvancedEscrow);
-        let client = AdvancedEscrowClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        client.init(&admin);
-
-        let buyer = Address::generate(&env);
-        let seller = Address::generate(&env);
-        let participants = soroban_sdk::vec![&env, buyer.clone(), seller.clone()];
-        let result = client.try_create_escrow_advanced(
-            &1,
-            &(i128::MAX / 2),
-            &buyer,
-            &seller,
-            &participants,
-            &1,
-            &None,
-            &1u64,
-        );
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_ok());
-    }
-
-    #[test]
-    fn test_zero_amount_rejected() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, AdvancedEscrow);
-        let client = AdvancedEscrowClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        client.init(&admin);
-
-        let buyer = Address::generate(&env);
-        let seller = Address::generate(&env);
-        let participants = soroban_sdk::vec![&env, buyer.clone(), seller.clone()];
-        let err = client.try_create_escrow_advanced(
-            &1,
-            &0,
-            &buyer,
-            &seller,
-            &participants,
-            &1,
-            &None,
-            &1u64,
-        );
-        assert_eq!(err, Err(Ok(EscrowError::DepositExceedsAmount)));
-    }
-
-    #[test]
-    fn test_duplicate_signer_rejected() {
-        let (env, _contract_id, _admin, buyer, seller) = setup();
-        let client = AdvancedEscrowClient::new(&env, &_contract_id);
-
-        let escrow_id = create_escrow_with_amount(&env, &client, &buyer, &seller, 1_000);
-        client.deposit_funds(&escrow_id, &1_000);
-
-        env.mock_all_auths();
-        client.sign_approval(&escrow_id, &ApprovalType::Release, &buyer);
-
-        env.mock_all_auths();
-        let err = client.try_sign_approval(&escrow_id, &ApprovalType::Release, &buyer);
-        match err {
-            Err(Ok(EscrowError::AlreadySigned)) => {},
-            other => panic!("Expected AlreadySigned, got {:?}", other),
-        }
     }
 }

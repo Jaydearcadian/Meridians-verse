@@ -16,6 +16,10 @@ name = "stellar_insured_claims"
 path = "src/lib.rs"
 crate-type = ["cdylib"]
 
+[dev-dependencies]
+stellar-insured-risk-pool = { path = "../risk_pool" }
+stellar-insured-policy = { path = "../policy" }
+
 [features]
 default = ["std"]
 std = ["soroban-sdk/testutils"]

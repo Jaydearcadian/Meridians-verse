@@ -74,7 +74,7 @@ pub struct BridgeTransaction {
 pub struct ChainBridgeInfo {
     pub chain_id: u32,
     pub chain_name: String,
-    pub bridge_contract_address: Option<String>,
+    pub bridge_contract_address: String,
     pub is_active: bool,
     pub gas_multiplier: u32,
     pub confirmation_blocks: u32,
@@ -88,4 +88,18 @@ pub enum RecoveryAction {
     RefundGas,
     RetryBridge,
     CancelBridge,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct InboundBridgeMessage {
+    pub source_chain: u32,
+    pub sender: Address,
+    pub nonce: u64,
+    pub message_hash: BytesN<32>,
+    pub source_ledger: u64,
+    pub destination_chain: u32,
+    pub recipient: Address,
+    pub token_id: u64,
+    pub metadata: PropertyMetadata,
 }

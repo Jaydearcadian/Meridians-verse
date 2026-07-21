@@ -79,6 +79,7 @@ export default function RootLayout({
           enableSystem
           storageKey="meridian-theme"
           themes={['light', 'dark', 'system']}
+          disableTransitionOnChange
         >
           <MotionConfig reducedMotion="user">
             {children}
@@ -87,7 +88,6 @@ export default function RootLayout({
           <PerformanceMonitor />
         </ThemeProvider>
         {process.env.NODE_ENV === 'production' && <Analytics />}
-        <PerformanceMonitor />
       </body>
     </html>
   )
