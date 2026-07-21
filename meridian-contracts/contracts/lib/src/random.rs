@@ -1,4 +1,4 @@
-use soroban_sdk::{Env, Vec, Address};
+use soroban_sdk::{Env, Vec, Val, TryFromVal, IntoVal};
 
 pub struct Randomness;
 
@@ -10,16 +10,16 @@ impl Randomness {
     }
 
     /// Selects a random item from a Vec.
-    pub fn select_one<T: Clone>(env: &Env, items: Vec<T>) -> Option<T> {
+    pub fn select_one<T: Clone + IntoVal<Env, Val> + TryFromVal<Env, Val>>(env: &Env, items: Vec<T>) -> Option<T> {
         if items.is_empty() {
             return None;
         }
-        let index = env.prng().gen_range(0..items.len());
+        let index = env.prng().gen_range::<u64>(0u64..items.len() as u64) as u32;
         Some(items.get(index).unwrap())
     }
 
     /// Selects multiple unique items from a Vec (e.g., for auditor selection).
-    pub fn select_multiple<T: Clone + PartialEq>(env: &Env, items: Vec<T>, count: u32) -> Vec<T> {
+    pub fn select_multiple<T: Clone + PartialEq + IntoVal<Env, Val> + TryFromVal<Env, Val>>(env: &Env, items: Vec<T>, count: u32) -> Vec<T> {
         if items.len() <= count {
             return items;
         }
@@ -28,7 +28,7 @@ impl Randomness {
         let mut available = items;
 
         for _ in 0..count {
-            let index = env.prng().gen_range(0..available.len());
+            let index = env.prng().gen_range::<u64>(0u64..available.len() as u64) as u32;
             let item = available.get(index).unwrap();
             selected.push_back(item.clone());
             available.remove(index);

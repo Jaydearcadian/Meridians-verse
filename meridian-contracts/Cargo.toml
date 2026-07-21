@@ -1,25 +1,7 @@
 [workspace]
 members = [
     "contracts/lib",
-    "contracts/traits",
-    "contracts/proxy",
     "contracts/escrow",
-    "contracts/ipfs-metadata",
-    "security-audit",
-    "contracts/oracle",
-    "contracts/bridge",
-    "contracts/property-token",
-    "contracts/insurance",
-    "contracts/analytics",
-    "contracts/fees",
-    "contracts/compliance_registry",
-    "contracts/fractional",
-    "contracts/policy",
-    "contracts/claims",
-    "contracts/risk_pool",
-    "contracts/governance",
-    "contracts/slashing",
-    "tests",
 ]
 resolver = "2"
 
