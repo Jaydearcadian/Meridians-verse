@@ -5,6 +5,7 @@ import { createHash, randomBytes, createHmac } from 'crypto';
 import { AuditLog, AuditAction } from '../audit/audit-log.entity';
 import { AuditService } from '../audit/audit.service';
 import { Webhook } from './webhook.entity';
+import { LeaderboardProofService } from '../leaderboard/leaderboard-proof.service';
 
 export interface ContractEvent {
   txHash: string;
@@ -37,6 +38,7 @@ export class EventsService implements OnModuleInit {
 
   constructor(
     private readonly auditService: AuditService,
+    private readonly leaderboardProofService: LeaderboardProofService,
     @InjectRepository(Webhook)
     private readonly webhookRepo: Repository<Webhook>,
   ) {}
@@ -85,12 +87,18 @@ export class EventsService implements OnModuleInit {
       const events = await this.provider.getEvents(fromBlock, latestBlock);
       for (const event of events) {
         try {
+          const contribution = this.leaderboardProofService.extractContribution(event);
+          const epochNumber = this.leaderboardProofService.getEpochNumberFromBlock(event.blockNumber);
+
           const auditEntry = await this.auditService.logContractEvent({
             txHash: event.txHash,
             contract: event.contract,
             contractAction: event.action,
             blockNumber: event.blockNumber,
             rawEvent: (event.data || {}) as Record<string, unknown>,
+            participantAddress: contribution.address,
+            contributionXp: contribution.xp,
+            epochNumber,
           });
 
           await this.deliverWebhooks(event, auditEntry);
@@ -283,11 +291,25 @@ export class EventsService implements OnModuleInit {
   }
 
   private hashLeaf(value: string): string {
-    return createHash('sha256').update(value).digest('hex');
+    return this.simpleHash(value);
   }
 
   private hashNode(left: string, right: string): string {
-    return createHash('sha256').update(`${left}:${right}`).digest('hex');
+    return this.simpleHash(`${left}:${right}`);
+  }
+
+  private simpleHash(value: string): string {
+    let state = 0x811c9dc5;
+    let state2 = 0x811c9dc5;
+    for (let i = 0; i < value.length; i++) {
+      state ^= value.charCodeAt(i);
+      state = Math.imul(state, 0x01000193);
+      state2 ^= value.charCodeAt(i);
+      state2 = Math.imul(state2, 0x01000193);
+    }
+    const p1 = (state >>> 0).toString(16).padStart(8, '0');
+    const p2 = (state2 >>> 0).toString(16).padStart(8, '0');
+    return p1 + p2;
   }
 
   private async deliverWebhooks(
