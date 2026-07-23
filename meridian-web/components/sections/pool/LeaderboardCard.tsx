@@ -3,6 +3,7 @@
 import { motion } from 'framer-motion';
 import { Award } from 'lucide-react';
 import { cardReveal, containerVariants, itemVariantsLeft, sectionViewport } from '@/lib/animations/variants';
+import { verifyProof } from '@/lib/merkle-proof';
 
 interface LeaderboardEntry {
   rank: number;
@@ -12,23 +13,12 @@ interface LeaderboardEntry {
   proof?: { leaf: string; proof: string[]; root: string; verified: boolean; leafIndex: number } | null;
 }
 
-function verifyProof(leaf: string, proof: string[], root: string): boolean {
-  if (!leaf || !root) return false;
-
-  let current = leaf;
-  for (const sibling of proof) {
-    current = `${current}:${sibling}`;
-  }
-
-  return current === root;
-}
-
 const leaderboard: LeaderboardEntry[] = [
-  { rank: 1, name: 'Alex Chen', xp: 15420, yield: '$1,250' },
-  { rank: 2, name: 'Sarah Williams', xp: 14890, yield: '$1,180' },
-  { rank: 3, name: 'Marcus Johnson', xp: 13650, yield: '$1,095' },
-  { rank: 4, name: 'Emma Davis', xp: 12340, yield: '$987' },
-  { rank: 5, name: 'James Wilson', xp: 11890, yield: '$945' },
+  { rank: 1, name: 'Alex Chen', xp: 15420, yield: '$1,250', proof: { leaf: 'a1b2c3', proof: ['d4e5f6'], root: 'root-hash', verified: true, leafIndex: 0 } },
+  { rank: 2, name: 'Sarah Williams', xp: 14890, yield: '$1,180', proof: { leaf: 'b2c3d4', proof: ['e5f6a1'], root: 'root-hash', verified: true, leafIndex: 1 } },
+  { rank: 3, name: 'Marcus Johnson', xp: 13650, yield: '$1,095', proof: null },
+  { rank: 4, name: 'Emma Davis', xp: 12340, yield: '$987', proof: null },
+  { rank: 5, name: 'James Wilson', xp: 11890, yield: '$945', proof: null },
 ];
 
 export function LeaderboardCard() {
@@ -56,7 +46,9 @@ export function LeaderboardCard() {
         className="space-y-3"
       >
         {leaderboard.map((entry) => {
-          const isVerified = entry.proof ? verifyProof(entry.proof.leaf, entry.proof.proof, entry.proof.root) : false;
+          const isVerified = entry.proof
+            ? verifyProof(entry.proof.leaf, entry.proof.proof, entry.proof.root)
+            : false;
           return (
           <motion.div
             key={entry.rank}

@@ -5,12 +5,14 @@ import { AuditService } from '../audit/audit.service';
 import { AuditLog } from '../audit/audit-log.entity';
 import { EventsService, RpcProvider, ContractEvent } from './events.service';
 import { Webhook } from './webhook.entity';
+import { LeaderboardProofService } from '../leaderboard/leaderboard-proof.service';
 
 describe('EventsService', () => {
   let service: EventsService;
   let mockAuditService: Partial<AuditService>;
   let mockWebhookRepo: Partial<Repository<Webhook>>;
   let mockRpcProvider: RpcProvider;
+  let mockLeaderboardService: Partial<LeaderboardProofService>;
 
   beforeEach(async () => {
     const mockAuditLogRepo = {
@@ -42,6 +44,9 @@ describe('EventsService', () => {
       previousValues: null,
       newValues: null,
       ipAddress: null,
+      participantAddress: null,
+      contributionXp: 0,
+      epochNumber: null,
     } as AuditLog);
 
     mockWebhookRepo = {
@@ -51,11 +56,17 @@ describe('EventsService', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
+    mockLeaderboardService = {
+      extractContribution: jest.fn().mockReturnValue({ address: null, xp: 0 }),
+      getEpochNumberFromBlock: jest.fn().mockReturnValue(1),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         EventsService,
         { provide: AuditService, useValue: mockAuditService },
         { provide: getRepositoryToken(Webhook), useValue: mockWebhookRepo },
+        { provide: LeaderboardProofService, useValue: mockLeaderboardService },
       ],
     }).compile();
 

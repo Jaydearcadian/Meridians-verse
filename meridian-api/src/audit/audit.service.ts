@@ -25,6 +25,9 @@ export interface ContractEventContext {
   entityId?: string | null;
   performedById?: number | null;
   performedByEmail?: string | null;
+  participantAddress?: string | null;
+  contributionXp?: number;
+  epochNumber?: number | null;
 }
 
 @Injectable()
@@ -69,6 +72,9 @@ export class AuditService {
       previousHash,
       chainHash,
       rawEvent: ctx.rawEvent ?? null,
+      participantAddress: ctx.participantAddress ?? null,
+      contributionXp: ctx.contributionXp ?? 0,
+      epochNumber: ctx.epochNumber ?? null,
     });
     return this.auditRepo.save(entry);
   }
