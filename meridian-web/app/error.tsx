@@ -81,7 +81,7 @@ export default function GlobalErrorBoundary({ error, reset }: ErrorBoundaryProps
             <RefreshCw className="h-4 w-4" />
             Try Again
           </Button>
-          <Link href="/" passHref>
+          <Link href="/">
             <Button variant="outline" className="w-full sm:w-auto gap-2">
               <Home className="h-4 w-4" />
               Go Home

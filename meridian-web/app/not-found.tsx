@@ -42,7 +42,7 @@ export default function NotFoundState() {
 
       {/* Primary actions */}
       <div className="flex flex-col sm:flex-row items-center justify-center gap-3 w-full max-w-sm mx-auto">
-        <Link href="/" className="w-full sm:w-auto" passHref>
+        <Link href="/" className="w-full sm:w-auto">
           <Button variant="default" className="w-full gap-2">
             <Home className="h-4 w-4" />
             Return Home
