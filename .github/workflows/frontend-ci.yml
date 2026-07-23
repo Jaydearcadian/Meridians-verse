@@ -148,25 +148,26 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install Lighthouse CI
+        run: pnpm add -D @lhci/cli wait-on
+
       - name: Build the application
         run: pnpm build
 
       - name: Start server in background
         run: |
           pnpm start -p 3100 &
-          sleep 5
-          # Wait until the server responds
           npx wait-on http://localhost:3100 --timeout 60000
 
-      - name: Run Lighthouse CI
+      - name: Run Lighthouse CI audit
         run: |
-          npx lhci autorun --collect.url=http://localhost:3100 \
+          npx lhci autorun \
+            --collect.url=http://localhost:3100 \
             --collect.url=http://localhost:3100/dashboard \
             --collect.settings.preset=desktop \
             --collect.settings.onlyCategories=performance,accessibility,best-practices \
-            --assert.preset=lighthouse:no-puppeteer \
             --assert.aggregationMethod=median \
-            --upload.target=temporary-public-storage \
-            || true
+            --assert.matrix={\"categories:performance\":[\"passer-all\"],\"categories:accessibility\":[\"passer-all\"]} \
+            --upload.target=temporary-public-storage
         env:
           LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}

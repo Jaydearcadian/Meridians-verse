@@ -16,26 +16,28 @@ vi.mock('framer-motion', async () => {
   };
 });
 
-// Mock the useFocusSession hook with default idle state
-const mockStartSession = vi.fn();
-const mockCancelSession = vi.fn();
-const mockTriggerCompleteSession = vi.fn();
+// Define a named mock function so we can reconfigure its return value per test block
+const mockUseFocusSession = vi.fn();
 
 vi.mock('@/hooks/useFocusSession', () => ({
-  useFocusSession: vi.fn(() => ({
-    activeSession: null,
-    timeLeft: 0,
-    isActive: false,
-    isLoading: false,
-    startSession: mockStartSession,
-    cancelSession: mockCancelSession,
-    triggerCompleteSession: mockTriggerCompleteSession,
-  })),
+  useFocusSession: mockUseFocusSession,
 }));
+
+// Default idle state shared across idle tests
+const IDLE_STATE = {
+  activeSession: null,
+  timeLeft: 0,
+  isActive: false,
+  isLoading: false,
+  startSession: vi.fn(),
+  cancelSession: vi.fn(),
+  triggerCompleteSession: vi.fn(),
+};
 
 describe('TimerSelector — idle state', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseFocusSession.mockReturnValue(IDLE_STATE);
   });
 
   it('renders the heading and all three duration options', () => {
@@ -54,7 +56,6 @@ describe('TimerSelector — idle state', () => {
     render(<TimerSelector />);
 
     const defaultBtn = screen.getByText('25 min');
-    // The selected button gets a primary background class
     expect(defaultBtn.className).toContain('bg-primary');
   });
 
@@ -75,24 +76,21 @@ describe('TimerSelector — idle state', () => {
 
     fireEvent.click(screen.getByText('Start Focus Session'));
 
-    expect(mockStartSession).toHaveBeenCalledWith(25);
+    expect(IDLE_STATE.startSession).toHaveBeenCalledWith(25);
   });
 });
 
 describe('TimerSelector — active session state', () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
-
-    // Re-mock useFocusSession to return an active state
-    const useFocusSession = (await vi.importActual('@/hooks/useFocusSession')) as any;
-    vi.mocked(useFocusSession).mockReturnValue({
+    mockUseFocusSession.mockReturnValue({
       activeSession: { durationMinutes: 25 },
       timeLeft: 25 * 60,
       isActive: true,
       isLoading: false,
-      startSession: mockStartSession,
-      cancelSession: mockCancelSession,
-      triggerCompleteSession: mockTriggerCompleteSession,
+      startSession: vi.fn(),
+      cancelSession: vi.fn(),
+      triggerCompleteSession: vi.fn(),
     });
   });
 
@@ -100,45 +98,61 @@ describe('TimerSelector — active session state', () => {
     render(<TimerSelector />);
 
     expect(screen.getByText('Session in Progress')).toBeVisible();
-    // The timer should show minutes:seconds format
     expect(screen.getByText('25:00')).toBeVisible();
   });
 
   it('calls cancelSession when Cancel is pressed', () => {
-    render(<TimerSelector />);
+    const cancelSession = vi.fn();
+    mockUseFocusSession.mockReturnValue({
+      activeSession: { durationMinutes: 25 },
+      timeLeft: 25 * 60,
+      isActive: true,
+      isLoading: false,
+      startSession: vi.fn(),
+      cancelSession,
+      triggerCompleteSession: vi.fn(),
+    });
 
+    render(<TimerSelector />);
     fireEvent.click(screen.getByText('Cancel'));
-    expect(mockCancelSession).toHaveBeenCalledTimes(1);
+    expect(cancelSession).toHaveBeenCalledTimes(1);
   });
 
   it('calls triggerCompleteSession when Simulate End is pressed', () => {
-    render(<TimerSelector />);
+    const triggerCompleteSession = vi.fn();
+    mockUseFocusSession.mockReturnValue({
+      activeSession: { durationMinutes: 25 },
+      timeLeft: 25 * 60,
+      isActive: true,
+      isLoading: false,
+      startSession: vi.fn(),
+      cancelSession: vi.fn(),
+      triggerCompleteSession,
+    });
 
+    render(<TimerSelector />);
     fireEvent.click(screen.getByText('Simulate End'));
-    expect(mockTriggerCompleteSession).toHaveBeenCalledTimes(1);
+    expect(triggerCompleteSession).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('TimerSelector — loading state', () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
-
-    const useFocusSession = (await vi.importActual('@/hooks/useFocusSession')) as any;
-    vi.mocked(useFocusSession).mockReturnValue({
+    mockUseFocusSession.mockReturnValue({
       activeSession: { durationMinutes: 25 },
       timeLeft: 25 * 60,
       isActive: true,
       isLoading: true,
-      startSession: mockStartSession,
-      cancelSession: mockCancelSession,
-      triggerCompleteSession: mockTriggerCompleteSession,
+      startSession: vi.fn(),
+      cancelSession: vi.fn(),
+      triggerCompleteSession: vi.fn(),
     });
   });
 
   it('shows a spinner and disables the action button while loading', () => {
     render(<TimerSelector />);
 
-    // The loading spinner is inside the "Simulate End" button
     const endButton = screen.getByText('Syncing...');
     expect(endButton).toBeVisible();
     expect(endButton.closest('button')).toBeDisabled();
