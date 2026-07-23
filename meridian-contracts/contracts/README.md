@@ -42,6 +42,62 @@ To find zero-knowledge compliance proof, privacy preference, audit, and dashboar
 
 The core contract connection interfaces can be found in [traits/src/lib.rs](traits/src/lib.rs).
 
+## Storage Migration Policy
+
+### Overview
+
+All Soroban contracts in this workspace implement a standardized storage migration pattern to enable backward-compatible schema evolution. This ensures that existing on-chain deployments can be upgraded without data loss or breaking changes.
+
+### Implementation Pattern
+
+Each contract defines:
+
+1. **StorageVersion enum**: An enum with variants representing each storage schema version (V1, V2, etc.)
+2. **Version DataKey**: A storage key tracking the current schema version
+3. **migrate() function**: An admin-only entry point that performs incremental migrations
+
+### Migration Rules
+
+- **Additive only**: Migrations may only add new fields or modify logic, never remove or rename existing storage keys
+- **Idempotent**: Calling `migrate(env, to_version)` multiple times with the same target version is safe and no-op
+- **Forward only**: Downgrades are rejected to prevent data corruption
+- **Admin only**: Migration requires admin authorization (or appropriate role-based access)
+- **Default values**: New fields are initialized with safe defaults (typically 0 or empty collections)
+
+### Contract-Specific Implementations
+
+#### Escrow Contract ([escrow/src/lib.rs](escrow/src/lib.rs))
+
+- **Current version**: V2
+- **V1 → V2 migration**: Adds `FeeBps` field (default: 0)
+- **Storage keys**: See [escrow/src/storage.rs](escrow/src/storage.rs)
+- **Migration tests**: [escrow/src/migration_test.rs](escrow/src/migration_test.rs)
+
+#### Risk Pool Contract ([risk_pool/src/lib.rs](risk_pool/src/lib.rs))
+
+- **Current version**: V2
+- **V1 → V2 migration**: Adds `LockedCapital` field (default: 0)
+- **Storage keys**: See [risk_pool/src/lib.rs](risk_pool/src/lib.rs)
+- **Migration tests**: [risk_pool/src/migration_test.rs](risk_pool/src/migration_test.rs)
+
+### Migration Process
+
+When adding new fields to a contract:
+
+1. Increment the current version in `StorageVersion::current()`
+2. Add new `DataKey` variants for the new fields
+3. Add a migration step in the `migrate()` function's match statement
+4. Initialize new fields with safe defaults
+5. Add tests verifying:
+   - Old data is preserved
+   - New fields default correctly
+   - Migration is idempotent
+   - Non-admins cannot migrate
+
+### Historical Notes
+
+- **escrow/src/lib.rs.new**: Removed - was an outdated draft that duplicated the main contract file without the modular structure (storage.rs, types.rs, validation.rs) now in use
+
 ## Tradeoffs
 
 This README focuses on major contract entry points rather than documenting every test and helper file. That keeps the map useful for reviewers while the source-level comments explain function behavior closer to the code.

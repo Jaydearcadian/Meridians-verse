@@ -798,6 +798,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "propchain-escrow"
+version = "1.0.0"
+dependencies = [
+ "soroban-sdk",
+ "stellar-insured-lib",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"

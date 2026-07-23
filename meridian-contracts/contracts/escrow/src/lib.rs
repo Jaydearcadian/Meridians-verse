@@ -4,10 +4,13 @@ mod storage;
 mod types;
 mod validation;
 
+#[cfg(test)]
+mod migration_test;
+
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
 use stellar_insured_lib::{EscrowError, ValidationError};
 
-use storage::DataKey;
+use storage::{DataKey, StorageVersion};
 use types::{ApprovalType, EscrowData, EscrowStatus, MultiSigConfig};
 use validation::{
     get_admin, require_future_timestamp, require_non_zero_address, require_non_zero_u64,
@@ -30,9 +33,10 @@ impl AdvancedEscrow {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
-            .set(&DataKey::Version, &CONTRACT_VERSION);
+            .set(&DataKey::Version, &StorageVersion::current());
         env.storage().instance().set(&DataKey::EscrowCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().set(&DataKey::FeeBps, &0u32);
 
         env.events()
             .publish((symbol_short!("escrow"), symbol_short!("init")), admin);
@@ -88,7 +92,7 @@ impl AdvancedEscrow {
         require_non_zero_address(&buyer).map_err(|_| EscrowError::Unauthorized)?;
         require_non_zero_address(&seller).map_err(|_| EscrowError::Unauthorized)?;
         for participant in participants.iter() {
-            require_non_zero_address(participant).map_err(|_| EscrowError::Unauthorized)?;
+            require_non_zero_address(&participant).map_err(|_| EscrowError::Unauthorized)?;
         }
         if let Some(time_lock) = release_time_lock {
             require_future_timestamp(time_lock, env.ledger().timestamp(), "release_time_lock")
@@ -272,15 +276,60 @@ impl AdvancedEscrow {
         );
         Ok(())
     }
+
+    pub fn migrate(env: Env, admin: Address, to_version: StorageVersion) -> Result<(), EscrowError> {
+        admin.require_auth();
+        require_non_zero_address(&admin).map_err(|_| EscrowError::Unauthorized)?;
+        if admin != get_admin(&env) {
+            return Err(EscrowError::Unauthorized);
+        }
+
+        let current_version: StorageVersion = env
+            .storage()
+            .instance()
+            .get(&DataKey::Version)
+            .unwrap_or(StorageVersion::V1);
+
+        if current_version == to_version {
+            // Already at target version - idempotent
+            return Ok(());
+        }
+
+        if to_version < current_version {
+            return Err(EscrowError::InvalidStatus);
+        }
+
+        match (current_version, to_version) {
+            (StorageVersion::V1, StorageVersion::V2) => {
+                // Migration V1 -> V2: Add FeeBps field with default value
+                if !env.storage().instance().has(&DataKey::FeeBps) {
+                    env.storage().instance().set(&DataKey::FeeBps, &0u32);
+                }
+                env.storage().instance().set(&DataKey::Version, &StorageVersion::V2);
+            }
+            _ => return Err(EscrowError::InvalidStatus),
+        }
+
+        env.events()
+            .publish((symbol_short!("escrow"), symbol_short!("migrated")), to_version);
+        Ok(())
+    }
 }
 
 #[contractimpl]
 impl AdvancedEscrow {
-    pub fn version(env: Env) -> u32 {
+    pub fn version(env: Env) -> StorageVersion {
         env.storage()
             .instance()
             .get(&DataKey::Version)
-            .unwrap_or(CONTRACT_VERSION)
+            .unwrap_or(StorageVersion::V1)
+    }
+
+    pub fn get_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .unwrap_or(0)
     }
 
     pub fn get_admin(env: Env) -> Address {
