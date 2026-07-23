@@ -167,7 +167,7 @@ jobs:
             --collect.settings.preset=desktop \
             --collect.settings.onlyCategories=performance,accessibility,best-practices \
             --assert.aggregationMethod=median \
-            --assert.matrix={\"categories:performance\":[\"passer-all\"],\"categories:accessibility\":[\"passer-all\"]} \
+            --assert.scoring='{"performance":0.8,"accessibility":0.9,"best-practices":0.8}' \
             --upload.target=temporary-public-storage
         env:
           LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
