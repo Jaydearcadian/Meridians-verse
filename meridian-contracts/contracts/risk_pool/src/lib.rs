@@ -165,6 +165,45 @@ impl RiskPoolContract {
         Ok(())
     }
 
+    /// Absorb a slashed provider stake into the pool (#601).
+    ///
+    /// Called by the governance contract when a slashing proposal executes. The
+    /// slashed portion of the target's personal stake is forfeited to the pool's
+    /// collectively-available capital: the target can no longer withdraw it, and
+    /// it becomes available to cover claims. The tokens are already held by the
+    /// pool (they were transferred in at `deposit_liquidity` time), so this is a
+    /// pure reallocation and moves no tokens.
+    ///
+    /// Gated on the `Governance` role, mirroring `payout_claim`'s role check.
+    pub fn absorb_slash(env: Env, target: Address, amount: i128) -> Result<(), RiskPoolError> {
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Governance);
+
+        if amount <= 0 {
+            return Err(RiskPoolError::InvalidAmount);
+        }
+
+        let stake = get_provider_stake(&env, &target);
+        if stake < amount {
+            return Err(RiskPoolError::InsufficientStake);
+        }
+
+        // Reduce the target's personal stake; the forfeited amount stays in the
+        // pool as collectively-available capital.
+        let new_stake = stake - amount;
+        env.storage().persistent().set(&DataKey::ProviderStake(target.clone()), &new_stake);
+
+        let new_available = get_available_capital(&env) + amount;
+        env.storage().instance().set(&DataKey::AvailableCapital, &new_available);
+
+        // #601: structured event for the slashed-stake credit
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("slashed")),
+            (target, amount, new_available),
+        );
+        Ok(())
+    }
+
     pub fn get_pool_stats(env: Env) -> PoolStats {
         PoolStats {
             total_capital: get_total_capital(&env),
