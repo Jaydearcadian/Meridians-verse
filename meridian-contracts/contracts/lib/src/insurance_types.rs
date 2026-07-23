@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, String, Vec};
+use soroban_sdk::{contracttype, Address, String, Symbol, Vec};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,4 +84,5 @@ pub enum GovernanceAction {
     ClaimApproval(u64),  // claim_id
     FundAllocation(Address, i128),  // recipient, amount
     PolicyChange(u64),  // policy_id
+    Slashing(Address, Symbol, i128),  // target, role, amount (#601)
 }

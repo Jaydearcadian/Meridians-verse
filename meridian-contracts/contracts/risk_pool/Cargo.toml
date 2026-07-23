@@ -14,7 +14,7 @@ stellar-insured-lib = { path = "../lib" }
 [lib]
 name = "stellar_insured_risk_pool"
 path = "src/lib.rs"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["std"]

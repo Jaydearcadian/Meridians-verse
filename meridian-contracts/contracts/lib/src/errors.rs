@@ -50,6 +50,8 @@ pub enum RiskPoolError {
     InsufficientStake = 4,
     /// Insufficient available capital in pool for operation
     InsufficientPoolFunds = 5,
+    /// Amount must be greater than zero
+    InvalidAmount = 6,
 }
 
 /// Governance contract errors
@@ -79,6 +81,8 @@ pub enum GovernanceError {
     RiskPoolContractNotSet = 10,
     /// Policy contract address not configured
     PolicyContractNotSet = 11,
+    /// Slashing contract address not configured
+    SlashingContractNotSet = 12,
 }
 
 /// Oracle contract errors (Soroban version)
