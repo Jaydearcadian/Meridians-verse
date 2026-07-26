@@ -103,8 +103,11 @@ mod property_token {
 
         total_shares: Mapping<TokenId, u128>,
         dividends_per_share: Mapping<TokenId, u128>,
+        // Legacy credit mapping retained for compatibility but no longer used.
         dividend_credit: Mapping<(AccountId, TokenId), u128>,
         dividend_balance: Mapping<(AccountId, TokenId), u128>,
+        // New checkpoint storing the last seen dividends_per_share per holder.
+        dividend_checkpoint: Mapping<(AccountId, TokenId), u128>,
         proposal_counter: Mapping<TokenId, u64>,
         proposals: Mapping<(TokenId, u64), Proposal>,
         votes_cast: Mapping<(TokenId, u64, AccountId), bool>,
@@ -657,8 +660,10 @@ mod property_token {
             if ts == 0 {
                 return Err(Error::InvalidRequest);
             }
+
+            // Use safe multiplication to avoid overflow on large deposits.
             let scaling: u128 = 1_000_000_000_000;
-            let add = value.saturating_mul(scaling) / ts;
+            let add = self.safe_mul_div(value, scaling, ts);
             let cur = self.dividends_per_share.get(token_id).unwrap_or(0);
             let new = cur.saturating_add(add);
             self.dividends_per_share.insert(token_id, &new);
@@ -991,18 +996,21 @@ mod property_token {
             token_id: TokenId,
         ) -> Result<(), Error> {
             let scaling: u128 = 1_000_000_000_000;
-            let dps = self.dividends_per_share.get(token_id).unwrap_or(0);
-            let credited = self.dividend_credit.get((account, token_id)).unwrap_or(0);
-            if dps > credited {
+            let current_dps = self.dividends_per_share.get(token_id).unwrap_or(0);
+            // Retrieve the last checkpoint for this holder.
+            let checkpoint = self.dividend_checkpoint.get((account, token_id)).unwrap_or(0);
+            if current_dps > checkpoint {
                 let bal = self.balances.get((account, token_id)).unwrap_or(0);
-                let mut owed = self.dividend_balance.get((account, token_id)).unwrap_or(0);
-                let delta = dps.saturating_sub(credited);
-                let add = bal.saturating_mul(delta) / scaling;
-                owed = owed.saturating_add(add);
+                let delta = current_dps.saturating_sub(checkpoint);
+                // Compute additional credit safely.
+                let add = self.safe_mul_div(bal, delta, scaling);
+                let owed = self.dividend_balance.get((account, token_id)).unwrap_or(0).saturating_add(add);
                 self.dividend_balance.insert((account, token_id), &owed);
-                self.dividend_credit.insert((account, token_id), &dps);
-            } else if credited == 0 && dps > 0 {
-                self.dividend_credit.insert((account, token_id), &dps);
+                // Update the checkpoint to the latest per‑share value.
+                self.dividend_checkpoint.insert((account, token_id), &current_dps);
+            } else if checkpoint == 0 && current_dps > 0 {
+                // First time the holder sees any dividends.
+                self.dividend_checkpoint.insert((account, token_id), &current_dps);
             }
             Ok(())
         }
