@@ -6,6 +6,7 @@ members = [
     "contracts/risk_pool",
     "contracts/governance",
     "contracts/slashing",
+    "contracts/escrow",
 ]
 resolver = "2"
 

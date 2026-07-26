@@ -11,6 +11,9 @@ publish = false
 soroban-sdk = { workspace = true }
 stellar-insured-lib = { path = "../lib" }
 
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+
 [lib]
 name = "stellar_insured_risk_pool"
 path = "src/lib.rs"

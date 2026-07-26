@@ -4,6 +4,9 @@ use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, E
 use stellar_insured_lib::RiskPoolError;
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 
+#[cfg(test)]
+mod migration_test;
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -14,6 +17,21 @@ pub enum DataKey {
     AvailableCapital,
     ClaimsPaid,
     ProviderStake(Address),
+    Version,
+    LockedCapital,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[contracttype]
+pub enum StorageVersion {
+    V1 = 1,
+    V2 = 2,
+}
+
+impl StorageVersion {
+    pub const fn current() -> Self {
+        StorageVersion::V2
+    }
 }
 
 #[contracttype]
@@ -59,6 +77,8 @@ impl RiskPoolContract {
         env.storage().instance().set(&DataKey::TotalCapital, &0i128);
         env.storage().instance().set(&DataKey::AvailableCapital, &0i128);
         env.storage().instance().set(&DataKey::ClaimsPaid, &0i128);
+        env.storage().instance().set(&DataKey::Version, &StorageVersion::current());
+        env.storage().instance().set(&DataKey::LockedCapital, &0i128);
         access_control::init_access_control(&env, &admin);
         Ok(())
     }
@@ -214,6 +234,68 @@ impl RiskPoolContract {
 
     pub fn get_provider_info(env: Env, provider: Address) -> i128 {
         get_provider_stake(&env, &provider)
+    }
+
+    pub fn migrate(env: Env, admin: Address, to_version: StorageVersion) -> Result<(), RiskPoolError> {
+        admin.require_auth();
+        
+        // Check if caller is admin (similar to escrow pattern)
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(RiskPoolError::AlreadyInitialized)?;
+        
+        if admin != stored_admin {
+            return Err(RiskPoolError::AlreadyInitialized);
+        }
+
+        let current_version: StorageVersion = env
+            .storage()
+            .instance()
+            .get(&DataKey::Version)
+            .unwrap_or(StorageVersion::V1);
+
+        if current_version == to_version {
+            // Already at target version - idempotent
+            return Ok(());
+        }
+
+        if to_version < current_version {
+            return Err(RiskPoolError::AlreadyInitialized);
+        }
+
+        match (current_version, to_version) {
+            (StorageVersion::V1, StorageVersion::V2) => {
+                // Migration V1 -> V2: Add LockedCapital field with default value
+                if !env.storage().instance().has(&DataKey::LockedCapital) {
+                    env.storage().instance().set(&DataKey::LockedCapital, &0i128);
+                }
+                env.storage().instance().set(&DataKey::Version, &StorageVersion::V2);
+            }
+            _ => return Err(RiskPoolError::AlreadyInitialized),
+        }
+
+        env.events()
+            .publish((symbol_short!("pool"), symbol_short!("migrated")), to_version);
+        Ok(())
+    }
+}
+
+#[contractimpl]
+impl RiskPoolContract {
+    pub fn version(env: Env) -> StorageVersion {
+        env.storage()
+            .instance()
+            .get(&DataKey::Version)
+            .unwrap_or(StorageVersion::V1)
+    }
+
+    pub fn get_locked_capital(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::LockedCapital)
+            .unwrap_or(0)
     }
 }
 
