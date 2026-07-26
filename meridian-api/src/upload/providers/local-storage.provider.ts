@@ -32,8 +32,10 @@ export class LocalStorageProvider implements StorageProvider {
       const resolvedPath = path.resolve(filePath);
       const resolvedUploadDir = path.resolve(uploadDir);
 
-      if (!resolvedPath.startsWith(resolvedUploadDir + path.sep) &&
-          resolvedPath !== resolvedUploadDir) {
+      if (
+        !resolvedPath.startsWith(resolvedUploadDir + path.sep) &&
+        resolvedPath !== resolvedUploadDir
+      ) {
         throw new InternalServerErrorException(
           'Invalid file path detected (potential path traversal)',
         );

@@ -1,4 +1,4 @@
-use soroban_sdk::{Env, Vec, Address};
+use soroban_sdk::{Env, Address};
 
 pub struct Randomness;
 
@@ -9,31 +9,12 @@ impl Randomness {
         env.prng().gen_range(0..max)
     }
 
-    /// Selects a random item from a Vec.
-    pub fn select_one<T: Clone>(env: &Env, items: Vec<T>) -> Option<T> {
-        if items.is_empty() {
-            return None;
+    pub fn next_bytes(env: &Env, len: u32) -> soroban_sdk::Bytes {
+        let mut bytes = soroban_sdk::Bytes::new(env);
+        for _ in 0..len {
+            let val: u8 = env.prng().gen_range::<u64>(0..256) as u8;
+            bytes.push_back(val);
         }
-        let index = env.prng().gen_range(0..items.len());
-        Some(items.get(index).unwrap())
-    }
-
-    /// Selects multiple unique items from a Vec (e.g., for auditor selection).
-    pub fn select_multiple<T: Clone + PartialEq>(env: &Env, items: Vec<T>, count: u32) -> Vec<T> {
-        if items.len() <= count {
-            return items;
-        }
-
-        let mut selected = Vec::new(env);
-        let mut available = items;
-
-        for _ in 0..count {
-            let index = env.prng().gen_range(0..available.len());
-            let item = available.get(index).unwrap();
-            selected.push_back(item.clone());
-            available.remove(index);
-        }
-
-        selected
+        bytes
     }
 }

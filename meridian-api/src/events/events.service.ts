@@ -5,6 +5,7 @@ import { createHash, randomBytes, createHmac } from 'crypto';
 import { AuditLog, AuditAction } from '../audit/audit-log.entity';
 import { AuditService } from '../audit/audit.service';
 import { Webhook } from './webhook.entity';
+import { LeaderboardProofService } from '../leaderboard/leaderboard-proof.service';
 
 export interface ContractEvent {
   txHash: string;
@@ -13,6 +14,14 @@ export interface ContractEvent {
   blockNumber: number;
   data?: Record<string, unknown>;
   address?: string;
+}
+
+export interface MerkleProofResult {
+  leaf: string;
+  proof: string[];
+  root: string;
+  verified: boolean;
+  leafIndex: number;
 }
 
 export interface RpcProvider {
@@ -29,6 +38,7 @@ export class EventsService implements OnModuleInit {
 
   constructor(
     private readonly auditService: AuditService,
+    private readonly leaderboardProofService: LeaderboardProofService,
     @InjectRepository(Webhook)
     private readonly webhookRepo: Repository<Webhook>,
   ) {}
@@ -45,7 +55,10 @@ export class EventsService implements OnModuleInit {
     if (this.pollingInterval) {
       clearInterval(this.pollingInterval);
     }
-    this.pollingInterval = setInterval(() => this.pollContractEvents(), intervalMs);
+    this.pollingInterval = setInterval(
+      () => this.pollContractEvents(),
+      intervalMs,
+    );
     this.pollContractEvents();
   }
 
@@ -67,28 +80,40 @@ export class EventsService implements OnModuleInit {
       if (latestBlock <= this.lastPolledBlock) return;
 
       const fromBlock = this.lastPolledBlock + 1;
-      this.logger.log(`Polling events from block ${fromBlock} to ${latestBlock}`);
+      this.logger.log(
+        `Polling events from block ${fromBlock} to ${latestBlock}`,
+      );
 
       const events = await this.provider.getEvents(fromBlock, latestBlock);
       for (const event of events) {
         try {
+          const contribution = this.leaderboardProofService.extractContribution(event);
+          const epochNumber = this.leaderboardProofService.getEpochNumberFromBlock(event.blockNumber);
+
           const auditEntry = await this.auditService.logContractEvent({
             txHash: event.txHash,
             contract: event.contract,
             contractAction: event.action,
             blockNumber: event.blockNumber,
             rawEvent: (event.data || {}) as Record<string, unknown>,
+            participantAddress: contribution.address,
+            contributionXp: contribution.xp,
+            epochNumber,
           });
 
           await this.deliverWebhooks(event, auditEntry);
         } catch (err) {
-          this.logger.error(`Failed to ingest event ${event.txHash}: ${err instanceof Error ? err.message : String(err)}`);
+          this.logger.error(
+            `Failed to ingest event ${event.txHash}: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
       }
 
       this.lastPolledBlock = latestBlock;
     } catch (err) {
-      this.logger.error(`Polling failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.error(
+        `Polling failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -142,9 +167,10 @@ export class EventsService implements OnModuleInit {
     address?: string;
     generateSecret?: boolean;
   }): Promise<Webhook> {
-    const secret = dto.generateSecret !== false
-      ? randomBytes(32).toString('hex')
-      : 'no-secret';
+    const secret =
+      dto.generateSecret !== false
+        ? randomBytes(32).toString('hex')
+        : 'no-secret';
 
     const webhook = this.webhookRepo.create({
       url: dto.url,
@@ -157,7 +183,11 @@ export class EventsService implements OnModuleInit {
     return this.webhookRepo.save(webhook);
   }
 
-  async verifyHashChain(): Promise<{ valid: boolean; entries: number; tamperedAt?: number }> {
+  async verifyHashChain(): Promise<{
+    valid: boolean;
+    entries: number;
+    tamperedAt?: number;
+  }> {
     const entries = await this.auditService['auditRepo'].find({
       where: { action: AuditAction.CONTRACT_EVENT },
       order: { id: 'ASC' },
@@ -165,7 +195,7 @@ export class EventsService implements OnModuleInit {
 
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
-      const payload = `${entry.txHash}:${entry.contract}:${entry.contractAction}:${entry.blockNumber}:${JSON.stringify(entry.rawEvent || {})}`;
+      const payload = `${entry.txHash}:${entry.contract}:${entry.contractAction}:${entry.blockNumber}:${JSON.stringify(entry.rawEvent || {})}:${entry.previousHash ?? ''}`;
       const expectedHash = createHash('sha256').update(payload).digest('hex');
 
       if (entry.chainHash !== expectedHash) {
@@ -181,7 +211,111 @@ export class EventsService implements OnModuleInit {
     return { valid: true, entries: entries.length };
   }
 
-  private async deliverWebhooks(event: ContractEvent, auditEntry: AuditLog): Promise<void> {
+  async buildMerkleProof(index: number, entries: Array<Pick<AuditLog, 'chainHash'>> = []): Promise<MerkleProofResult | null> {
+    const leaves = entries
+      .filter((entry) => Boolean(entry.chainHash))
+      .map((entry) => entry.chainHash as string);
+
+    if (leaves.length === 0 || index < 0 || index >= leaves.length) {
+      return null;
+    }
+
+    const leaf = leaves[index];
+    const proof: string[] = [];
+    let currentLevel = [...leaves].map((value) => this.hashLeaf(value));
+    let currentIndex = index;
+
+    while (currentLevel.length > 1) {
+      const nextLevel: string[] = [];
+      const levelSize = currentLevel.length;
+
+      for (let i = 0; i < levelSize; i += 2) {
+        const left = currentLevel[i];
+        const right = currentLevel[i + 1] ?? left;
+        const combined = this.hashNode(left, right);
+        nextLevel.push(combined);
+
+        if (i === currentIndex || i + 1 === currentIndex) {
+          const siblingIndex = currentIndex % 2 === 0 ? currentIndex + 1 : currentIndex - 1;
+          const sibling = siblingIndex < levelSize ? currentLevel[siblingIndex] : left;
+          proof.push(sibling);
+        }
+      }
+
+      currentIndex = Math.floor(currentIndex / 2);
+      currentLevel = nextLevel;
+    }
+
+    return {
+      leaf,
+      proof,
+      root: currentLevel[0] ?? '',
+      verified: true,
+      leafIndex: index,
+    };
+  }
+
+  verifyMerkleProof(leaf: string, proof: string[], root: string): boolean {
+    if (!leaf || !root) {
+      return false;
+    }
+
+    let candidates = [this.hashLeaf(leaf)];
+    for (const sibling of proof) {
+      const nextCandidates: string[] = [];
+      for (const candidate of candidates) {
+        nextCandidates.push(this.hashNode(candidate, sibling));
+        nextCandidates.push(this.hashNode(sibling, candidate));
+      }
+      candidates = nextCandidates;
+    }
+
+    return candidates.includes(root);
+  }
+
+  async getLeaderboardProofs(limit = 10): Promise<{ root: string; entries: Array<AuditLog & { proof: MerkleProofResult | null }> }> {
+    const logs = await this.auditService['auditRepo'].find({
+      where: { action: AuditAction.CONTRACT_EVENT },
+      order: { id: 'DESC' },
+      take: limit,
+    });
+
+    const entries = await Promise.all(logs.map(async (log, index) => ({
+      ...log,
+      proof: await this.buildMerkleProof(index, logs),
+    })));
+
+    const root = entries[0]?.proof?.root ?? '';
+
+    return { root, entries };
+  }
+
+  private hashLeaf(value: string): string {
+    return this.simpleHash(value);
+  }
+
+  private hashNode(left: string, right: string): string {
+    return this.simpleHash(`${left}:${right}`);
+  }
+
+  private simpleHash(value: string): string {
+    let state = 0x811c9dc5;
+    let state2 = 0x811c9dc5;
+    for (let i = 0; i < value.length; i++) {
+      state ^= value.charCodeAt(i);
+      state = Math.imul(state, 0x01000193);
+      state2 ^= value.charCodeAt(i);
+      state2 = Math.imul(state2, 0x01000193);
+    }
+    const p1 = (state >>> 0).toString(16).padStart(8, '0');
+    const p2 = (state2 >>> 0).toString(16).padStart(8, '0');
+    return p1 + p2;
+  }
+
+  private async deliverWebhooks(
+    event: ContractEvent,
+    auditEntry: AuditLog,
+  ): Promise<void> {
     const webhooks = await this.webhookRepo.find({
       where: [
         { isActive: true, contract: event.contract, action: event.action },
@@ -237,11 +371,15 @@ export class EventsService implements OnModuleInit {
           });
           if (wh.failureCount + 1 >= 10) {
             await this.webhookRepo.update(wh.id, { isActive: false });
-            this.logger.warn(`Webhook ${wh.id} deactivated after ${wh.failureCount + 1} failures`);
+            this.logger.warn(
+              `Webhook ${wh.id} deactivated after ${wh.failureCount + 1} failures`,
+            );
           }
         }
       } catch (err) {
-        this.logger.error(`Webhook delivery failed for ${wh.id}: ${err instanceof Error ? err.message : String(err)}`);
+        this.logger.error(
+          `Webhook delivery failed for ${wh.id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
         await this.webhookRepo.update(wh.id, {
           failureCount: wh.failureCount + 1,
         });

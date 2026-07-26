@@ -21,7 +21,10 @@ export class WebhookRegistrationDto {
   @IsString()
   address?: string;
 
-  @ApiPropertyOptional({ description: 'Secret used for HMAC signature', default: true })
+  @ApiPropertyOptional({
+    description: 'Secret used for HMAC signature',
+    default: true,
+  })
   @IsOptional()
   @IsBoolean()
   generateSecret?: boolean;

@@ -71,4 +71,13 @@ export class AuditLog {
 
   @Column({ type: 'json', nullable: true })
   rawEvent: Record<string, unknown> | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  participantAddress: string | null;
+
+  @Column({ type: 'int', default: 0 })
+  contributionXp: number;
+
+  @Column({ type: 'int', nullable: true })
+  epochNumber: number | null;
 }

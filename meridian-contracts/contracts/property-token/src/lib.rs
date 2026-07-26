@@ -14,6 +14,10 @@ use scale_info::prelude::vec::Vec;
 mod property_token {
     use super::*;
 
+    const MAX_ERROR_LOG: u64 = 50;
+    const ERROR_WINDOW_DURATION_MS: u64 = 3_600_000;
+    const DEFAULT_ERROR_LIMIT: u64 = 10;
+
     /// Error types for the property token contract
     #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
@@ -46,6 +50,7 @@ mod property_token {
         ProposalClosed,
         AskNotFound,
         InconsistentState,
+        RateLimited,
     }
 
     /// Property Token contract that maintains compatibility with ERC-721 and ERC-1155
@@ -89,9 +94,12 @@ mod property_token {
 
         // Error logging and monitoring
         error_counts: Mapping<(AccountId, String), u64>,
-        error_rates: Mapping<String, (u64, u64)>, // (count, window_start)
+        error_rates: Mapping<AccountId, ErrorRateState>,
         recent_errors: Mapping<u64, ErrorLogEntry>,
         error_log_counter: u64,
+        account_error_totals: Mapping<AccountId, u64>,
+        error_limit: u64,
+        last_error_hash: Hash,
 
         total_shares: Mapping<TokenId, u128>,
         dividends_per_share: Mapping<TokenId, u128>,
@@ -172,6 +180,9 @@ mod property_token {
                 error_rates: Mapping::default(),
                 recent_errors: Mapping::default(),
                 error_log_counter: 0,
+                account_error_totals: Mapping::default(),
+                error_limit: DEFAULT_ERROR_LIMIT,
+                last_error_hash: Hash::from([0u8; 32]),
 
                 total_shares: Mapping::default(),
                 dividends_per_share: Mapping::default(),
@@ -230,21 +241,22 @@ mod property_token {
             self.ensure_non_zero_account(&to)?;
 
             // Check if caller is authorized to transfer
-            let token_owner = self.token_owner.get(token_id).ok_or_else(|| {
-                let caller = self.env().caller();
-                self.log_error(
-                    caller,
-                    "TOKEN_NOT_FOUND".to_string(),
-                    format!("Token ID {} does not exist", token_id),
-                    vec![
-                        ("token_id".to_string(), token_id.to_string()),
-                        ("operation".to_string(), "transfer_from".to_string()),
-                    ],
-                );
-                Error::TokenNotFound
-            })?;
+            let token_owner = match self.token_owner.get(token_id) {
+                Some(owner) => owner,
+                None => {
+                    self.log_error(
+                        caller,
+                        "TOKEN_NOT_FOUND".to_string(),
+                        format!("Token ID {} does not exist", token_id),
+                        vec![
+                            ("token_id".to_string(), token_id.to_string()),
+                            ("operation".to_string(), "transfer_from".to_string()),
+                        ],
+                    )?;
+                    return Err(Error::TokenNotFound);
+                }
+            };
             if token_owner != from {
-                let caller = self.env().caller();
                 self.log_error(
                     caller,
                     "UNAUTHORIZED".to_string(),
@@ -254,7 +266,7 @@ mod property_token {
                         ("caller".to_string(), format!("{:?}", caller)),
                         ("owner".to_string(), format!("{:?}", token_owner)),
                     ],
-                );
+                )?;
                 return Err(Error::Unauthorized);
             }
 
@@ -293,18 +305,21 @@ mod property_token {
         #[ink(message)]
         pub fn approve(&mut self, to: AccountId, token_id: TokenId) -> Result<(), Error> {
             let caller = self.env().caller();
-            let token_owner = self.token_owner.get(token_id).ok_or_else(|| {
-                self.log_error(
-                    caller,
-                    "TOKEN_NOT_FOUND".to_string(),
-                    format!("Token ID {} does not exist", token_id),
-                    vec![
-                        ("token_id".to_string(), token_id.to_string()),
-                        ("operation".to_string(), "approve".to_string()),
-                    ],
-                );
-                Error::TokenNotFound
-            })?;
+            let token_owner = match self.token_owner.get(token_id) {
+                Some(owner) => owner,
+                None => {
+                    self.log_error(
+                        caller,
+                        "TOKEN_NOT_FOUND".to_string(),
+                        format!("Token ID {} does not exist", token_id),
+                        vec![
+                            ("token_id".to_string(), token_id.to_string()),
+                            ("operation".to_string(), "approve".to_string()),
+                        ],
+                    )?;
+                    return Err(Error::TokenNotFound);
+                }
+            };
 
             if token_owner != caller && !self.is_approved_for_all(token_owner, caller) {
                 self.log_error(
@@ -316,7 +331,7 @@ mod property_token {
                         ("caller".to_string(), format!("{:?}", caller)),
                         ("owner".to_string(), format!("{:?}", token_owner)),
                     ],
-                );
+                )?;
                 return Err(Error::Unauthorized);
             }
 
@@ -1917,6 +1932,17 @@ mod property_token {
             self.admin
         }
 
+        /// Update the maximum number of recorded errors per caller within one window.
+        #[ink(message)]
+        pub fn set_error_limit(&mut self, limit: u64) -> Result<(), Error> {
+            self.ensure_admin()?;
+            if limit == 0 {
+                return Err(Error::InvalidRequest);
+            }
+            self.error_limit = limit;
+            Ok(())
+        }
+
         /// Internal helper to add a token to an owner
         fn add_token_to_owner(&mut self, to: AccountId, _token_id: TokenId) -> Result<(), Error> {
             let count = self.owner_token_count.get(to).unwrap_or(0);
@@ -2017,54 +2043,104 @@ mod property_token {
             subtotal.saturating_add(buffer)
         }
 
-        /// Log an error for monitoring and debugging
+        fn current_error_rate_state(&self, account: &AccountId, timestamp: u64) -> ErrorRateState {
+            match self.error_rates.get(account) {
+                Some(state)
+                    if timestamp
+                        < state
+                            .window_start
+                            .saturating_add(ERROR_WINDOW_DURATION_MS) =>
+                {
+                    state
+                }
+                _ => ErrorRateState {
+                    count: 0,
+                    window_start: timestamp,
+                },
+            }
+        }
+
+        fn hash_error_entry(
+            log_id: u64,
+            account: &AccountId,
+            error_code: &String,
+            message: &String,
+            timestamp: u64,
+            context: &Vec<(String, String)>,
+            prev_error_hash: &Hash,
+        ) -> Hash {
+            use ink::env::hash::{Blake2x256, CryptoHash};
+            use scale::Encode;
+
+            let data = (
+                log_id,
+                account,
+                error_code,
+                message,
+                timestamp,
+                context,
+                prev_error_hash,
+            );
+            let encoded = data.encode();
+            let mut hash_bytes = [0u8; 32];
+            Blake2x256::hash(&encoded, &mut hash_bytes);
+            Hash::from(hash_bytes)
+        }
+
+        /// Log an error for monitoring and debugging.
         fn log_error(
             &mut self,
             account: AccountId,
             error_code: String,
             message: String,
             context: Vec<(String, String)>,
-        ) {
+        ) -> Result<(), Error> {
             let timestamp = self.env().block_timestamp();
+            let mut rate_state = self.current_error_rate_state(&account, timestamp);
+
+            if rate_state.count >= self.error_limit {
+                return Err(Error::RateLimited);
+            }
+
+            rate_state.count = rate_state.count.saturating_add(1);
+            self.error_rates.insert(&account, &rate_state);
 
             // Update error count for this account and error code
             let key = (account, error_code.clone());
             let current_count = self.error_counts.get(&key).unwrap_or(0);
-            self.error_counts.insert(&key, &(current_count + 1));
-
-            // Update error rate (1 hour window)
-            let window_duration = 3600_000u64; // 1 hour in milliseconds
-            let rate_key = error_code.clone();
-            let (mut count, window_start) =
-                self.error_rates.get(&rate_key).unwrap_or((0, timestamp));
-
-            if timestamp >= window_start + window_duration {
-                // Reset window
-                count = 1;
-                self.error_rates.insert(&rate_key, &(count, timestamp));
-            } else {
-                count += 1;
-                self.error_rates.insert(&rate_key, &(count, window_start));
-            }
-
-            // Add to recent errors (keep last 100)
             let log_id = self.error_log_counter;
-            self.error_log_counter = self.error_log_counter.wrapping_add(1);
-
-            // Only keep last 100 errors (simple circular buffer)
-            if log_id >= 100 {
-                let old_id = log_id.wrapping_sub(100);
-                self.recent_errors.remove(&old_id);
-            }
+            let total_errors = self.account_error_totals.get(&account).unwrap_or(0);
+            let prev_error_hash = self.last_error_hash;
+            let entry_hash = Self::hash_error_entry(
+                log_id,
+                &account,
+                &error_code,
+                &message,
+                timestamp,
+                &context,
+                &prev_error_hash,
+            );
 
             let error_entry = ErrorLogEntry {
+                log_id,
                 error_code: error_code.clone(),
                 message,
                 account,
                 timestamp,
                 context,
+                prev_error_hash,
+                entry_hash,
             };
-            self.recent_errors.insert(&log_id, &error_entry);
+            let slot = log_id % MAX_ERROR_LOG;
+            self.recent_errors.insert(&slot, &error_entry);
+            self.error_counts
+                .insert(&key, &(current_count.saturating_add(1)));
+            self.account_error_totals
+                .insert(&error_entry.account, &(total_errors.saturating_add(1)));
+            self.error_log_counter = self.error_log_counter.wrapping_add(1);
+            self.last_error_hash = error_entry.entry_hash;
+
+            Ok(())
         }
 
         /// Get error count for an account and error code
@@ -2073,20 +2149,30 @@ mod property_token {
             self.error_counts.get(&(account, error_code)).unwrap_or(0)
         }
 
-        /// Get error rate for an error code (errors per hour)
+        /// Get the current sliding-window error rate for an account.
         #[ink(message)]
-        pub fn get_error_rate(&self, error_code: String) -> u64 {
+        pub fn get_error_rate(&self, account: AccountId) -> u64 {
             let timestamp = self.env().block_timestamp();
-            let window_duration = 3600_000u64; // 1 hour
+            self.current_error_rate_state(&account, timestamp).count
+        }
 
-            if let Some((count, window_start)) = self.error_rates.get(&error_code) {
-                if timestamp >= window_start + window_duration {
-                    0 // Window expired
-                } else {
-                    count
-                }
-            } else {
-                0
+        /// Get aggregated error telemetry for a caller.
+        #[ink(message)]
+        pub fn get_error_stats(&self, account: AccountId) -> ErrorStats {
+            let timestamp = self.env().block_timestamp();
+            let rate_state = self.current_error_rate_state(&account, timestamp);
+            let total_errors = self.account_error_totals.get(&account).unwrap_or(0);
+            let is_rate_limited = rate_state.count >= self.error_limit;
+
+            ErrorStats {
+                account,
+                total_errors,
+                window_error_count: rate_state.count,
+                window_start: rate_state.window_start,
+                error_limit: self.error_limit,
+                window_duration_ms: ERROR_WINDOW_DURATION_MS,
+                remaining_before_block: self.error_limit.saturating_sub(rate_state.count),
+                is_rate_limited,
             }
         }
 
@@ -2099,14 +2185,16 @@ mod property_token {
             }
 
             let mut errors = Vec::new();
-            let start_id = if self.error_log_counter > limit as u64 {
-                self.error_log_counter - limit as u64
-            } else {
-                0
-            };
+            let retained = core::cmp::min(self.error_log_counter, MAX_ERROR_LOG);
+            let requested = core::cmp::min(retained, limit as u64);
+            let start_id = self.error_log_counter.saturating_sub(requested);
 
             for i in start_id..self.error_log_counter {
-                if let Some(entry) = self.recent_errors.get(&i) {
+                let slot = i % MAX_ERROR_LOG;
+                if let Some(entry) = self.recent_errors.get(&slot) {
+                    if entry.log_id != i {
+                        continue;
+                    }
                     errors.push(entry);
                 }
             }

@@ -1,7 +1,6 @@
 import {
   Body,
   Controller,
-  DefaultValuePipe,
   Delete,
   Patch,
   Get,
@@ -9,10 +8,8 @@ import {
   ParseIntPipe,
   Post,
   Query,
-  ValidationPipe,
 } from '@nestjs/common';
 import { PostsService } from './provider/post.service';
-import { GetPostsParamDto } from './dto/post-param.dto';
 import { CreatePostDto } from './dto/create-post.dto';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { PatchPostDto } from './dto/patch-post.dto';
@@ -30,7 +27,6 @@ export class PostController {
   @ApiResponse({ status: 200, description: 'Successfully retrieved posts' })
   public getPosts(@Query() getPostDto: GetPostsDto) {
     return this.postService.FindAllposts(getPostDto);
-    console.log(getPostDto);
   }
 
   @Post()

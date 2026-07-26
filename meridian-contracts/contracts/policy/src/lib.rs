@@ -2,6 +2,7 @@
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
 use stellar_insured_lib::{InsurancePolicy, PolicyStatus, PolicyType};
+use stellar_insured_lib::access_control::{self, AccessControlRole};
 
 #[contracttype]
 #[derive(Clone)]
@@ -14,10 +15,6 @@ pub enum DataKey {
 }
 
 // --- Storage helpers (#378: data access abstraction) ---
-
-fn get_admin(env: &Env) -> Address {
-    env.storage().instance().get(&DataKey::Admin).unwrap()
-}
 
 fn get_policy_counter(env: &Env) -> u64 {
     env.storage().instance().get(&DataKey::PolicyCounter).unwrap_or(0)
@@ -45,6 +42,11 @@ impl PolicyContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::RiskPool, &risk_pool);
         env.storage().instance().set(&DataKey::PolicyCounter, &0u64);
+        access_control::init_access_control(&env, &admin);
+    }
+
+    pub fn set_role(env: Env, addr: Address, role: AccessControlRole) {
+        access_control::set_role(&env, &env.current_contract_address(), &addr, role);
     }
 
     pub fn issue_policy(
@@ -55,10 +57,8 @@ impl PolicyContract {
         duration_days: u32,
         policy_type: PolicyType,
     ) -> u64 {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
-        let admin = get_admin(&env);
-        admin.require_auth();
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
 
         let mut counter = get_policy_counter(&env);
         counter += 1;
@@ -160,7 +160,8 @@ impl PolicyContract {
     }
 
     pub fn set_claims_contract(env: Env, claims_contract: Address) {
-        get_admin(&env).require_auth();
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
         env.storage().instance().set(&DataKey::ClaimsContract, &claims_contract);
     }
 
@@ -198,18 +199,6 @@ impl PolicyContract {
             (policy_id, policy.holder),
         );
     }
-}
-
-#[contractimpl]
-impl PolicyContract {
-    pub fn get_policy(env: Env, policy_id: u64) -> InsurancePolicy {
-        get_policy_inner(&env, policy_id)
-    }
-
-    // Alias used by claims contract cross-contract call
-    pub fn get_pol(env: Env, policy_id: u64) -> InsurancePolicy {
-        get_policy_inner(&env, policy_id)
-    }
 
     pub fn get_stats(env: Env) -> u64 {
         get_policy_counter(&env)
@@ -217,5 +206,58 @@ impl PolicyContract {
 
     pub fn update_cl(env: Env, policy_id: u64, amount: i128) {
         Self::update_claimed(env, policy_id, amount)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Env, Address};
+
+    fn setup() -> (Env, Address, Address, Address) {
+        let env = Env::default();
+        let contract = env.register_contract(None, PolicyContract);
+        let admin = Address::generate(&env);
+        let risk_pool = Address::generate(&env);
+        env.mock_all_auths();
+        (env, contract, admin, risk_pool)
+    }
+
+    #[test]
+    fn test_initialize_sets_admin_role() {
+        let (env, contract, admin, risk) = setup();
+        env.as_contract(&contract, || {
+            PolicyContract::initialize(env.clone(), admin.clone(), risk);
+        });
+        env.as_contract(&contract, || {
+            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized")]
+    fn test_non_admin_set_claims_contract_rejected() {
+        let (env, contract, admin, risk) = setup();
+        let attacker = Address::generate(&env);
+        env.as_contract(&contract, || {
+            PolicyContract::initialize(env.clone(), admin.clone(), risk);
+        });
+        env.as_contract(&contract, || {
+            PolicyContract::set_claims_contract(env.clone(), attacker);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized")]
+    fn test_non_admin_issue_policy_rejected() {
+        let (env, contract, admin, risk) = setup();
+        env.as_contract(&contract, || {
+            PolicyContract::initialize(env.clone(), admin.clone(), risk);
+        });
+        let holder = Address::generate(&env);
+        env.as_contract(&contract, || {
+            PolicyContract::issue_policy(env.clone(), holder, 1000, 100, 365, PolicyType::Standard);
+        });
     }
 }

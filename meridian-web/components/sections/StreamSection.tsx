@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { containerVariants } from '@/lib/animations/variants';
+import { containerVariants, sectionReveal, sectionViewport } from '@/lib/animations/variants';
 import { StreamChartCard } from './stream/StreamChartCard';
 import { FeatureGrid } from './stream/FeatureGrid';
 import { EarningsCalculator } from './stream/EarningsCalculator';
@@ -13,10 +13,10 @@ export function StreamSection() {
       <motion.div
         role="presentation"
         aria-hidden="true"
-        initial={{ opacity: 0, y: 20 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6 }}
-        viewport={{ once: true }}
+        variants={sectionReveal}
+        initial="hidden"
+        whileInView="visible"
+        viewport={sectionViewport}
         className="text-center mb-16"
       >
         <h2 className="text-4xl sm:text-5xl font-bold text-foreground mb-4">Stream Pillar</h2>
@@ -37,7 +37,7 @@ export function StreamSection() {
           variants={containerVariants}
           initial="hidden"
           whileInView="visible"
-          viewport={{ once: true }}
+          viewport={sectionViewport}
           className="space-y-6"
         >
           <h3 className="text-2xl font-bold text-foreground">Continuous Compensation</h3>

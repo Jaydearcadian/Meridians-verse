@@ -87,7 +87,7 @@ describe('PostsService', () => {
   };
   let userService: { findOneId: jest.Mock };
   let tagService: { findMultiTag: jest.Mock };
-  let paginationService: { paginatedQuery: jest.Mock };
+  let paginationService: { paginatedCursorQuery: jest.Mock };
   let dataSource: { createQueryRunner: jest.Mock };
   let currentQueryRunner: ReturnType<typeof makeQueryRunner>['runner'];
 
@@ -102,9 +102,10 @@ describe('PostsService', () => {
     userService = { findOneId: jest.fn(async () => mockAuthor) };
     tagService = { findMultiTag: jest.fn(async () => mockTags) };
     paginationService = {
-      paginatedQuery: jest.fn(async () => ({
+      paginatedCursorQuery: jest.fn(async () => ({
         data: [mockPost],
-        meta: { total: 1, page: 1, limit: 10 },
+        nextCursor: null,
+        total: 1,
       })),
     };
     dataSource = { createQueryRunner: jest.fn(() => currentQueryRunner) };
@@ -120,16 +121,23 @@ describe('PostsService', () => {
 
   describe('FindAllposts', () => {
     it('delegates to the pagination service and returns paginated results', async () => {
-      const query = { limit: 10, page: 1 } as any;
+      const query = {
+        limit: 10,
+        cursor: 5,
+        startDate: undefined,
+        endDate: undefined,
+      } as any;
       const result = await service.FindAllposts(query);
 
-      expect(paginationService.paginatedQuery).toHaveBeenCalledWith(
-        { limit: 10, page: 1 },
+      expect(paginationService.paginatedCursorQuery).toHaveBeenCalledWith(
+        { limit: 10, cursor: 5, startDate: undefined, endDate: undefined },
         postRepository,
+        ['tags', 'author', 'metaOptions'],
       );
       expect(result).toEqual({
         data: [mockPost],
-        meta: { total: 1, page: 1, limit: 10 },
+        nextCursor: null,
+        total: 1,
       });
     });
   });
@@ -144,7 +152,12 @@ describe('PostsService', () => {
 
   describe('createPost', () => {
     it('opens a transaction, resolves author + tags, persists the post, and commits', async () => {
-      const dto = { title: 'Hello', content: 'World', authorId: 1, tags: [1, 2] } as any;
+      const dto = {
+        title: 'Hello',
+        content: 'World',
+        authorId: 1,
+        tags: [1, 2],
+      } as any;
 
       const result = await service.createPost(dto);
 
@@ -162,7 +175,9 @@ describe('PostsService', () => {
     });
 
     it('rolls back and rethrows when the manager save fails', async () => {
-      currentQueryRunner.manager.save.mockRejectedValueOnce(new Error('disk full'));
+      currentQueryRunner.manager.save.mockRejectedValueOnce(
+        new Error('disk full'),
+      );
 
       await expect(
         service.createPost({ authorId: 1, tags: [] } as any),
@@ -174,7 +189,9 @@ describe('PostsService', () => {
     });
 
     it('rolls back and rethrows when userService.findOneId throws', async () => {
-      userService.findOneId.mockRejectedValueOnce(new Error('author not found'));
+      userService.findOneId.mockRejectedValueOnce(
+        new Error('author not found'),
+      );
 
       await expect(
         service.createPost({ authorId: 99, tags: [] } as any),
@@ -206,7 +223,9 @@ describe('PostsService', () => {
     });
 
     it('rolls back and rethrows when the manager save fails during update', async () => {
-      currentQueryRunner.manager.save.mockRejectedValueOnce(new Error('constraint violation'));
+      currentQueryRunner.manager.save.mockRejectedValueOnce(
+        new Error('constraint violation'),
+      );
 
       await expect(
         service.UpdatePost({ id: 10, tags: [] } as any),
@@ -227,8 +246,12 @@ describe('PostsService', () => {
         postStatus: 'draft',
         tags: [],
       };
-      currentQueryRunner.manager.findOneBy.mockResolvedValueOnce({ ...existing });
-      currentQueryRunner.manager.save.mockImplementationOnce(async (_, post) => post);
+      currentQueryRunner.manager.findOneBy.mockResolvedValueOnce({
+        ...existing,
+      });
+      currentQueryRunner.manager.save.mockImplementationOnce(
+        async (_, post) => post,
+      );
 
       const result = await service.UpdatePost({ id: 10, tags: [] } as any);
 

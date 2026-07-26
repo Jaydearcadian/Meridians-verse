@@ -22,16 +22,26 @@ async function bootstrap() {
   const nodeEnv = configService.get<string>('NODE_ENV') || 'development';
   const allowedOriginsString = configService.get<string>('ALLOWED_ORIGINS');
   const allowedOrigins = allowedOriginsString
-    ? allowedOriginsString.split(',').map(origin => origin.trim())
+    ? allowedOriginsString.split(',').map((origin) => origin.trim())
     : [];
-  
+
   // In development, we can allow all origins if no ALLOWED_ORIGINS is set
   // In production, we strictly enforce allowed origins
-  let corsOrigin: boolean | string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void);
+  let corsOrigin:
+    | boolean
+    | string
+    | string[]
+    | ((
+        origin: string,
+        callback: (err: Error | null, allow?: boolean) => void,
+      ) => void);
   if (nodeEnv === 'development' && allowedOrigins.length === 0) {
     corsOrigin = true;
   } else {
-    corsOrigin = (origin: string, callback: (err: Error | null, allow?: boolean) => void) => {
+    corsOrigin = (
+      origin: string,
+      callback: (err: Error | null, allow?: boolean) => void,
+    ) => {
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {

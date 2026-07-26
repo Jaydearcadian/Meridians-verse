@@ -12,7 +12,9 @@ jest.mock('@aws-sdk/client-s3', () => {
   };
 });
 
-function makeConfigService(overrides: Record<string, string> = {}): ConfigService {
+function makeConfigService(
+  overrides: Record<string, string> = {},
+): ConfigService {
   return {
     get: jest.fn((key: string) => {
       const defaults: Record<string, string> = {
@@ -72,7 +74,10 @@ describe('S3StorageProvider', () => {
 
   it('throws InternalServerErrorException when bucket is missing', async () => {
     const provider = new S3StorageProvider(
-      makeConfigService({ UPLOAD_S3_BUCKET: '', UPLOAD_S3_REGION: 'us-east-1' }),
+      makeConfigService({
+        UPLOAD_S3_BUCKET: '',
+        UPLOAD_S3_REGION: 'us-east-1',
+      }),
     );
     await expect(provider.uploadFile(makeFile('test.png'))).rejects.toThrow(
       'S3 storage is not properly configured (missing bucket or region)',

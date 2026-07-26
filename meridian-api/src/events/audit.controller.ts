@@ -1,5 +1,19 @@
-import { Controller, Get, Param, Query, HttpCode, HttpStatus, NotFoundException } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiQuery, ApiParam, ApiResponse } from '@nestjs/swagger';
+import {
+  Controller,
+  Get,
+  Param,
+  Query,
+  HttpCode,
+  HttpStatus,
+  NotFoundException,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiQuery,
+  ApiParam,
+  ApiResponse,
+} from '@nestjs/swagger';
 import { EventsService } from './events.service';
 import { AuditQueryDto } from './dto/audit-query.dto';
 
@@ -10,7 +24,9 @@ export class AuditController {
 
   @Get()
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'List audit log entries with cursor pagination and filters' })
+  @ApiOperation({
+    summary: 'List audit log entries with cursor pagination and filters',
+  })
   @ApiResponse({ status: 200, description: 'Paginated audit log entries' })
   async findAll(@Query() query: AuditQueryDto) {
     const result = await this.eventsService.findAuditLogs({
@@ -30,6 +46,22 @@ export class AuditController {
         nextCursor: result.nextCursor,
       },
     };
+  }
+
+  @Get('verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify the audit hash chain for all contract events' })
+  @ApiResponse({ status: 200, description: 'Hash-chain verification result' })
+  async verifyChain() {
+    return this.eventsService.verifyHashChain();
+  }
+
+  @Get('leaderboard')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Build Merkle proofs for the latest leaderboard audit entries' })
+  @ApiResponse({ status: 200, description: 'Merkle proof bundle for public leaderboard verification' })
+  async leaderboardProofs(@Query('limit') limit?: number) {
+    return this.eventsService.getLeaderboardProofs(limit ?? 10);
   }
 
   @Get(':txHash')

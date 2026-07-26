@@ -369,8 +369,9 @@
         #[ink::test]
         fn test_get_error_rate_nonexistent() {
             let contract = setup_contract();
+            let accounts = test::default_accounts::<DefaultEnvironment>();
 
-            let rate = contract.get_error_rate("NONEXISTENT".to_string());
+            let rate = contract.get_error_rate(accounts.alice);
             assert_eq!(rate, 0);
         }
 
@@ -383,6 +384,122 @@
             test::set_caller::<DefaultEnvironment>(accounts.bob);
             let errors = contract.get_recent_errors(10);
             assert_eq!(errors, Vec::new());
+        }
+
+        #[ink::test]
+        fn test_error_log_cap_respected() {
+            let mut contract = setup_contract();
+            let accounts = test::default_accounts::<DefaultEnvironment>();
+
+            test::set_caller::<DefaultEnvironment>(contract.admin());
+            contract
+                .set_error_limit(MAX_ERROR_LOG + 10)
+                .expect("admin should update error limit");
+
+            test::set_caller::<DefaultEnvironment>(accounts.bob);
+            for token_id in 0..(MAX_ERROR_LOG + 5) {
+                let result = contract.transfer_from(accounts.bob, accounts.charlie, token_id + 1_000);
+                assert_eq!(result, Err(Error::TokenNotFound));
+            }
+
+            test::set_caller::<DefaultEnvironment>(contract.admin());
+            let errors = contract.get_recent_errors((MAX_ERROR_LOG + 10) as u32);
+            assert_eq!(errors.len(), MAX_ERROR_LOG as usize);
+            assert_eq!(errors.first().expect("first retained error").log_id, 5);
+            assert_eq!(
+                errors.last().expect("last retained error").log_id,
+                MAX_ERROR_LOG + 4
+            );
+        }
+
+        #[ink::test]
+        fn test_rate_limit_blocks_abusive_caller() {
+            let mut contract = setup_contract();
+            let accounts = test::default_accounts::<DefaultEnvironment>();
+
+            test::set_caller::<DefaultEnvironment>(contract.admin());
+            contract
+                .set_error_limit(3)
+                .expect("admin should update error limit");
+
+            test::set_block_timestamp::<DefaultEnvironment>(1);
+            test::set_caller::<DefaultEnvironment>(accounts.bob);
+            for _ in 0..3 {
+                let result = contract.transfer_from(accounts.bob, accounts.charlie, 999);
+                assert_eq!(result, Err(Error::TokenNotFound));
+            }
+
+            let stats = contract.get_error_stats(accounts.bob);
+            assert_eq!(stats.total_errors, 3);
+            assert_eq!(stats.window_error_count, 3);
+            assert!(stats.is_rate_limited);
+            assert_eq!(stats.remaining_before_block, 0);
+
+            let blocked = contract.transfer_from(accounts.bob, accounts.charlie, 999);
+            assert_eq!(blocked, Err(Error::RateLimited));
+
+            test::set_caller::<DefaultEnvironment>(contract.admin());
+            let errors = contract.get_recent_errors(10);
+            assert_eq!(errors.len(), 3);
+
+            test::set_block_timestamp::<DefaultEnvironment>(ERROR_WINDOW_DURATION_MS + 10);
+            test::set_caller::<DefaultEnvironment>(accounts.bob);
+            let after_window = contract.transfer_from(accounts.bob, accounts.charlie, 999);
+            assert_eq!(after_window, Err(Error::TokenNotFound));
+        }
+
+        fn verify_error_chain(entries: &[ErrorLogEntry]) -> bool {
+            let zero_hash = Hash::from([0u8; 32]);
+
+            for (index, entry) in entries.iter().enumerate() {
+                let expected_prev = if index == 0 {
+                    zero_hash
+                } else {
+                    entries[index - 1].entry_hash
+                };
+
+                if entry.prev_error_hash != expected_prev {
+                    return false;
+                }
+
+                let recalculated = PropertyToken::hash_error_entry(
+                    entry.log_id,
+                    &entry.account,
+                    &entry.error_code,
+                    &entry.message,
+                    entry.timestamp,
+                    &entry.context,
+                    &entry.prev_error_hash,
+                );
+                if entry.entry_hash != recalculated {
+                    return false;
+                }
+            }
+
+            true
+        }
+
+        #[ink::test]
+        fn test_error_log_hash_chain_verifies() {
+            let mut contract = setup_contract();
+            let accounts = test::default_accounts::<DefaultEnvironment>();
+
+            test::set_caller::<DefaultEnvironment>(contract.admin());
+            contract
+                .set_error_limit(10)
+                .expect("admin should update error limit");
+
+            test::set_caller::<DefaultEnvironment>(accounts.bob);
+            for timestamp in 1..=3 {
+                test::set_block_timestamp::<DefaultEnvironment>(timestamp);
+                let result = contract.transfer_from(accounts.bob, accounts.charlie, 7_000 + timestamp);
+                assert_eq!(result, Err(Error::TokenNotFound));
+            }
+
+            test::set_caller::<DefaultEnvironment>(contract.admin());
+            let errors = contract.get_recent_errors(10);
+            assert_eq!(errors.len(), 3);
+            assert!(verify_error_chain(&errors));
         }
 
         // Helper: registers a property, verifies compliance, adds bob as operator,

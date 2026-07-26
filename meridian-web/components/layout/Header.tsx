@@ -3,13 +3,12 @@
 import Link from 'next/link';
 import { Menu, X } from 'lucide-react';
 import { useState } from 'react';
-import { useId } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { useActiveSection } from '@/hooks/useActiveSection';
 
 export function Header() {
   const [isOpen, setIsOpen] = useState(false);
-  const mobileMenuId = useId();
   const activeSection = useActiveSection();
 
   const isActive = (id: string) => activeSection === id;
@@ -41,32 +40,43 @@ export function Header() {
             <button className="px-6 py-2 text-sm font-medium rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">Get Started</button>
           </div>
 
-          {/* Mobile menu button */}
-          <button
-            onClick={() => setIsOpen(!isOpen)}
-            aria-label="Toggle navigation menu"
-            aria-expanded={isOpen}
-            aria-controls={mobileMenuId}
-            className="md:hidden p-2 text-foreground hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-          >
-            {isOpen ? <X size={24} aria-hidden="true" /> : <Menu size={24} aria-hidden="true" />}
-          </button>
-        </div>
+          {/* Accessible Mobile Menu Wrapper via Radix Dialog */}
+          <Dialog.Root open={isOpen} onOpenChange={setIsOpen}>
+            <Dialog.Trigger asChild>
+              <button
+                aria-label="Toggle navigation menu"
+                className="md:hidden p-2 text-foreground hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                {isOpen ? <X size={24} aria-hidden="true" /> : <Menu size={24} aria-hidden="true" />}
+              </button>
+            </Dialog.Trigger>
 
-        {/* Mobile Menu */}
-        {isOpen && (
-          <nav id={mobileMenuId} className="md:hidden pb-4 space-y-2">
-            <Link href="#focus" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors" onClick={() => setIsOpen(false)}>Focus</Link>
-            <Link href="#stream" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors" onClick={() => setIsOpen(false)}>Stream</Link>
-            <Link href="#pool" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors" onClick={() => setIsOpen(false)}>Pool</Link>
-            <Link href="#features" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors" onClick={() => setIsOpen(false)}>Features</Link>
-            <div className="flex items-center justify-between gap-2 px-4 pt-2">
-              <span className="text-xs uppercase tracking-wide text-muted-foreground">Theme</span>
-              <ThemeToggle />
-            </div>
-            <button className="w-full px-4 py-2 text-sm font-medium rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">Get Started</button>
-          </nav>
-        )}
+            <Dialog.Portal>
+              {/* Overlay background for modern backdrop blur consistency */}
+              <Dialog.Overlay className="fixed inset-0 z-40 bg-background/40 backdrop-blur-sm md:hidden" />
+              
+              <Dialog.Content className="fixed top-16 left-0 right-0 z-40 bg-background border-b border-border px-4 pb-6 pt-2 space-y-2 md:hidden shadow-lg focus:outline-none">
+                <Dialog.Title className="sr-only">Mobile Navigation Menu</Dialog.Title>
+                <Dialog.Description className="sr-only">Access site sections and system configuration links.</Dialog.Description>
+                
+                <nav className="space-y-2">
+                  <Link href="#focus" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => setIsOpen(false)}>Focus</Link>
+                  <Link href="#stream" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => setIsOpen(false)}>Stream</Link>
+                  <Link href="#pool" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => setIsOpen(false)}>Pool</Link>
+                  <Link href="#features" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => setIsOpen(false)}>Features</Link>
+                  
+                  <div className="flex items-center justify-between gap-2 px-4 pt-2 border-t border-border/50">
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">Theme</span>
+                    <ThemeToggle />
+                  </div>
+                  <div className="pt-2">
+                    <button className="w-full px-4 py-2 text-sm font-medium rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">Get Started</button>
+                  </div>
+                </nav>
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
+        </div>
       </div>
     </header>
   );

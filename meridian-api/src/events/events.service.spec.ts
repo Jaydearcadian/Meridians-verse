@@ -5,12 +5,14 @@ import { AuditService } from '../audit/audit.service';
 import { AuditLog } from '../audit/audit-log.entity';
 import { EventsService, RpcProvider, ContractEvent } from './events.service';
 import { Webhook } from './webhook.entity';
+import { LeaderboardProofService } from '../leaderboard/leaderboard-proof.service';
 
 describe('EventsService', () => {
   let service: EventsService;
   let mockAuditService: Partial<AuditService>;
   let mockWebhookRepo: Partial<Repository<Webhook>>;
   let mockRpcProvider: RpcProvider;
+  let mockLeaderboardService: Partial<LeaderboardProofService>;
 
   beforeEach(async () => {
     const mockAuditLogRepo = {
@@ -42,6 +44,9 @@ describe('EventsService', () => {
       previousValues: null,
       newValues: null,
       ipAddress: null,
+      participantAddress: null,
+      contributionXp: 0,
+      epochNumber: null,
     } as AuditLog);
 
     mockWebhookRepo = {
@@ -51,11 +56,17 @@ describe('EventsService', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
+    mockLeaderboardService = {
+      extractContribution: jest.fn().mockReturnValue({ address: null, xp: 0 }),
+      getEpochNumberFromBlock: jest.fn().mockReturnValue(1),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         EventsService,
         { provide: AuditService, useValue: mockAuditService },
         { provide: getRepositoryToken(Webhook), useValue: mockWebhookRepo },
+        { provide: LeaderboardProofService, useValue: mockLeaderboardService },
       ],
     }).compile();
 
@@ -118,9 +129,7 @@ describe('EventsService', () => {
       const mockFind = jest
         .spyOn(mockAuditService['auditRepo'], 'find')
         .mockResolvedValue([{ id: 1 } as AuditLog]);
-      jest
-        .spyOn(mockAuditService['auditRepo'], 'count')
-        .mockResolvedValue(1);
+      jest.spyOn(mockAuditService['auditRepo'], 'count').mockResolvedValue(1);
 
       const result = await service.findAuditLogs({ limit: 10 });
       expect(result.data).toHaveLength(1);
@@ -147,13 +156,62 @@ describe('EventsService', () => {
 
   describe('verifyHashChain', () => {
     it('should return valid for empty chain', async () => {
-      jest
-        .spyOn(mockAuditService['auditRepo'], 'find')
-        .mockResolvedValue([]);
+      jest.spyOn(mockAuditService['auditRepo'], 'find').mockResolvedValue([]);
 
       const result = await service.verifyHashChain();
       expect(result.valid).toBe(true);
       expect(result.entries).toBe(0);
+    });
+
+    it('should detect tampering in a historical audit entry', async () => {
+      const tamperedEntries = [
+        {
+          id: 1,
+          txHash: '0xtx1',
+          contract: 'escrow',
+          contractAction: 'created',
+          blockNumber: 100,
+          rawEvent: {},
+          previousHash: null,
+          chainHash: 'tampered-hash',
+        },
+        {
+          id: 2,
+          txHash: '0xtx2',
+          contract: 'governance',
+          contractAction: 'proposed',
+          blockNumber: 101,
+          rawEvent: {},
+          previousHash: 'tampered-hash',
+          chainHash: 'hash-2',
+        },
+      ] as AuditLog[];
+
+      jest.spyOn(mockAuditService['auditRepo'], 'find').mockResolvedValue(tamperedEntries);
+
+      const result = await service.verifyHashChain();
+      expect(result.valid).toBe(false);
+      expect(result.tamperedAt).toBe(1);
+    });
+  });
+
+  describe('buildMerkleProof', () => {
+    it('should produce a verifiable merkle proof for a leaderboard entry', async () => {
+      const entries = [
+        { id: 1, chainHash: 'leaf-1' },
+        { id: 2, chainHash: 'leaf-2' },
+        { id: 3, chainHash: 'leaf-3' },
+      ] as AuditLog[];
+
+      const proof = await service.buildMerkleProof(2, entries);
+
+      expect(proof).toBeDefined();
+      expect(proof?.verified).toBe(true);
+      expect(service.verifyMerkleProof(proof!.leaf, proof!.proof, proof!.root)).toBe(true);
+    });
+
+    it('should reject forged merkle proofs', () => {
+      expect(service.verifyMerkleProof('forged-leaf', ['fake-proof'], 'root')).toBe(false);
     });
   });
 

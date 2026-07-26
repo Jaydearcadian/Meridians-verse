@@ -19,7 +19,14 @@ import { FocusProvider } from '@/context/FocusContext';
 export function FocusSection() {
   return (
     <FocusProvider>
-      <section id="focus" className="py-20 px-4 max-w-7xl mx-auto">
+      <section 
+        id="focus" 
+        className="py-20 px-4 max-w-7xl mx-auto"
+        style={{
+          contentVisibility: 'auto',
+          containIntrinsicSize: '0 800px',
+        }}
+      >
         {/* Heading — SSR, zero JS, fast first paint */}
         <div className="text-center mb-16">
           <h2 className="text-4xl sm:text-5xl font-bold text-foreground mb-4">Focus Pillar</h2>

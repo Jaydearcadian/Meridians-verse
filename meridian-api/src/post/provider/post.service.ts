@@ -1,5 +1,4 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
-import { GetPostsParamDto } from '../dto/post-param.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Post } from '../post.entity';
 import { DataSource, Repository } from 'typeorm';
@@ -9,7 +8,6 @@ import { TagsService } from 'src/tag/tags.service';
 import { PatchPostDto } from '../dto/patch-post.dto';
 import { GetPostsDto } from '../dto/get-posts.dto';
 import { Pagination } from 'src/common/pagination/providers/pagination.provider';
-import { Paginated } from 'src/common/pagination/interfaces/paginated.interface';
 
 @Injectable()
 export class PostsService {
@@ -27,15 +25,20 @@ export class PostsService {
     private readonly dataSource: DataSource,
   ) {}
 
-  public async FindAllposts(postQuery: GetPostsDto): Promise<Paginated<Post>> {
-    const post = await this.paginationService.paginatedQuery(
+  public async FindAllposts(
+    postQuery: GetPostsDto,
+  ): Promise<{ data: Post[]; nextCursor: number | null; total: number }> {
+    const posts = await this.paginationService.paginatedCursorQuery(
       {
         limit: postQuery.limit,
-        page: postQuery.page,
+        cursor: postQuery.cursor,
+        startDate: postQuery.startDate,
+        endDate: postQuery.endDate,
       },
       this.postRepository,
+      ['tags', 'author', 'metaOptions'],
     );
-    return post;
+    return posts;
   }
 
   /**

@@ -2,6 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { Brain, Shield, Zap, TrendingUp, Lock, Users } from 'lucide-react';
+import { containerVariants, itemVariants, sectionReveal, sectionViewport } from '@/lib/animations/variants';
 
 export function Features() {
   const features = [
@@ -37,35 +38,15 @@ export function Features() {
     },
   ];
 
-  const containerVariants = {
-    hidden: { opacity: 0 },
-    visible: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.1,
-        delayChildren: 0.2,
-      },
-    },
-  };
-
-  const itemVariants = {
-    hidden: { opacity: 0, y: 20 },
-    visible: {
-      opacity: 1,
-      y: 0,
-      transition: { duration: 0.5 },
-    },
-  };
-
   return (
     <section id="features" className="py-20 px-4 max-w-7xl mx-auto">
       <motion.div
         role="presentation"
         aria-hidden="true"
-        initial={{ opacity: 0, y: 20 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6 }}
-        viewport={{ once: true }}
+        variants={sectionReveal}
+        initial="hidden"
+        whileInView="visible"
+        viewport={sectionViewport}
         className="text-center mb-16"
       >
         <h2 className="text-4xl sm:text-5xl font-bold text-foreground mb-4">Powerful Features</h2>
@@ -80,7 +61,7 @@ export function Features() {
         variants={containerVariants}
         initial="hidden"
         whileInView="visible"
-        viewport={{ once: true }}
+        viewport={sectionViewport}
         className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
       >
         {features.map((feature) => {

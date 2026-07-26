@@ -63,7 +63,11 @@ describe('flattenValidationErrors', () => {
     expect(result).toEqual(
       expect.arrayContaining([
         { field: 'password', message: 'weak', constraint: 'matches' },
-        { field: 'email', message: 'email must be an email', constraint: 'isEmail' },
+        {
+          field: 'email',
+          message: 'email must be an email',
+          constraint: 'isEmail',
+        },
       ]),
     );
   });
@@ -71,26 +75,30 @@ describe('flattenValidationErrors', () => {
   it('walks nested children with dot-notation paths', () => {
     const result = flattenValidationErrors([
       vErr('user', {}, [
-        vErr('profile', {}, [
-          vErr('email', { isEmail: 'must be valid' }),
-        ]),
+        vErr('profile', {}, [vErr('email', { isEmail: 'must be valid' })]),
       ]),
     ]);
     expect(result).toEqual([
-      { field: 'user.profile.email', message: 'must be valid', constraint: 'isEmail' },
+      {
+        field: 'user.profile.email',
+        message: 'must be valid',
+        constraint: 'isEmail',
+      },
     ]);
   });
 
   it('uses bracket notation for numeric indices (array items)', () => {
     const result = flattenValidationErrors([
       vErr('users', {}, [
-        vErr('0', {}, [
-          vErr('email', { isEmail: 'must be valid' }),
-        ]),
+        vErr('0', {}, [vErr('email', { isEmail: 'must be valid' })]),
       ]),
     ]);
     expect(result).toEqual([
-      { field: 'users[0].email', message: 'must be valid', constraint: 'isEmail' },
+      {
+        field: 'users[0].email',
+        message: 'must be valid',
+        constraint: 'isEmail',
+      },
     ]);
   });
 
@@ -99,7 +107,11 @@ describe('flattenValidationErrors', () => {
       vErr('user', { isObject: 'user must be an object' }),
     ]);
     expect(result).toEqual([
-      { field: 'user', message: 'user must be an object', constraint: 'isObject' },
+      {
+        field: 'user',
+        message: 'user must be an object',
+        constraint: 'isObject',
+      },
     ]);
   });
 
@@ -155,9 +167,7 @@ describe('validationExceptionFactory (ValidationPipe drop-in)', () => {
       }),
       vErr('email', { isEmail: 'email must be an email' }),
       vErr('users', {}, [
-        vErr('0', {}, [
-          vErr('firstName', { minLength: 'must be longer' }),
-        ]),
+        vErr('0', {}, [vErr('firstName', { minLength: 'must be longer' })]),
       ]),
     ]);
     const body = ex.getResponse() as Record<string, unknown>;
@@ -168,9 +178,21 @@ describe('validationExceptionFactory (ValidationPipe drop-in)', () => {
     expect(errors).toHaveLength(3);
     expect(errors).toEqual(
       expect.arrayContaining([
-        { field: 'password', message: 'Password must be 8-16 …', constraint: 'matches' },
-        { field: 'email', message: 'email must be an email', constraint: 'isEmail' },
-        { field: 'users[0].firstName', message: 'must be longer', constraint: 'minLength' },
+        {
+          field: 'password',
+          message: 'Password must be 8-16 …',
+          constraint: 'matches',
+        },
+        {
+          field: 'email',
+          message: 'email must be an email',
+          constraint: 'isEmail',
+        },
+        {
+          field: 'users[0].firstName',
+          message: 'must be longer',
+          constraint: 'minLength',
+        },
       ]),
     );
   });

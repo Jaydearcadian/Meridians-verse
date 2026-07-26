@@ -1,6 +1,7 @@
 import { Suspense } from 'react';
 import { Header } from '@/components/layout/Header';
 import { Footer } from '@/components/layout/Footer';
+import { MotionProvider } from '@/components/animations/MotionProvider';
 // Hero and FocusSection are pure Server Components — zero JS for LCP.
 import { Hero } from '@/components/sections/Hero';
 import { FocusSection } from '@/components/sections/FocusSection';
@@ -18,7 +19,7 @@ import { SectionSkeleton } from '@/components/sections/SectionSkeleton';
 
 export default function Page() {
   return (
-    <>
+    <MotionProvider>
       <Header />
       <main className="pt-16">
         {/* ── Above the fold ── server-rendered for SEO and fast LCP ──────── */}
@@ -54,6 +55,6 @@ export default function Page() {
         </Suspense>
       </main>
       <Footer />
-    </>
+    </MotionProvider>
   );
 }

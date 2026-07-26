@@ -11,6 +11,11 @@ publish = false
 soroban-sdk = { workspace = true }
 stellar-insured-lib = { path = "../lib" }
 
+[dev-dependencies]
+# #601: cross-contract integration tests for the slashing execution pipeline.
+stellar-insured-slashing = { path = "../slashing" }
+stellar-insured-risk-pool = { path = "../risk_pool" }
+
 [lib]
 name = "stellar_insured_governance"
 path = "src/lib.rs"

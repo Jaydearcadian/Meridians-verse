@@ -95,7 +95,8 @@ describe('PostController (integration)', () => {
     postsService = {
       FindAllposts: jest.fn(async () => ({
         data: [{ id: 1, title: 'Hello' }],
-        meta: { total: 1, page: 1, limit: 10 },
+        nextCursor: null,
+        total: 1,
       })),
       createPost: jest.fn(async (dto) => ({ id: 1, ...dto })),
       deleteOne: jest.fn(async (id) => ({ deleted: true, id })),

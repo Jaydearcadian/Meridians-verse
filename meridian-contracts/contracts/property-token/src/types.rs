@@ -75,11 +75,40 @@
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct ErrorLogEntry {
+        pub log_id: u64,
         pub error_code: String,
         pub message: String,
         pub account: AccountId,
         pub timestamp: u64,
         pub context: Vec<(String, String)>,
+        pub prev_error_hash: Hash,
+        pub entry_hash: Hash,
+    }
+
+    /// Per-account sliding window state for abusive caller detection.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+    )]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct ErrorRateState {
+        pub count: u64,
+        pub window_start: u64,
+    }
+
+    /// Aggregated error telemetry exposed by the contract.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+    )]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct ErrorStats {
+        pub account: AccountId,
+        pub total_errors: u64,
+        pub window_error_count: u64,
+        pub window_start: u64,
+        pub error_limit: u64,
+        pub window_duration_ms: u64,
+        pub remaining_before_block: u64,
+        pub is_rate_limited: bool,
     }
 
     #[derive(

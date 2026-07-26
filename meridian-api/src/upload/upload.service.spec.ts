@@ -1,6 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
-import { UploadService, ALLOWED_MIME_TYPES, MAX_FILE_SIZE } from './upload.service';
+import {
+  UploadService,
+  ALLOWED_MIME_TYPES,
+  MAX_FILE_SIZE,
+} from './upload.service';
 import { StorageProvider } from './storage-provider.interface';
 
 // Valid magic-byte headers for each allowed type
@@ -77,9 +81,7 @@ describe('UploadService', () => {
     });
 
     await expect(service.uploadFile(file)).rejects.toThrow(BadRequestException);
-    await expect(service.uploadFile(file)).rejects.toThrow(
-      /not allowed/i,
-    );
+    await expect(service.uploadFile(file)).rejects.toThrow(/not allowed/i);
   });
 
   it('throws BadRequestException for application/octet-stream', async () => {
@@ -99,9 +101,7 @@ describe('UploadService', () => {
       buffer: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00]),
     });
     await expect(service.uploadFile(file)).rejects.toThrow(BadRequestException);
-    await expect(service.uploadFile(file)).rejects.toThrow(
-      /magic byte/i,
-    );
+    await expect(service.uploadFile(file)).rejects.toThrow(/magic byte/i);
   });
 
   it('throws BadRequestException when an exe is disguised as a PDF', async () => {

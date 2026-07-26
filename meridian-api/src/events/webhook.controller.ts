@@ -1,10 +1,4 @@
-import {
-  Controller,
-  Post,
-  Body,
-  HttpCode,
-  HttpStatus,
-} from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { EventsService } from './events.service';
@@ -18,7 +12,9 @@ export class WebhookController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @Throttle({ default: { limit: 10, ttl: 60000 } })
-  @ApiOperation({ summary: 'Register a webhook to receive contract event notifications' })
+  @ApiOperation({
+    summary: 'Register a webhook to receive contract event notifications',
+  })
   @ApiResponse({ status: 201, description: 'Webhook registered successfully' })
   @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   async register(@Body() dto: WebhookRegistrationDto) {

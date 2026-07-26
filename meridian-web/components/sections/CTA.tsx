@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { ArrowRight } from 'lucide-react';
+import { cardReveal, sectionReveal, sectionViewport } from '@/lib/animations/variants';
 
 import { cn } from '@/lib/utils';
 import {
@@ -62,10 +63,10 @@ function CTAContent({ variant }: { variant: CtaVariantId }) {
   return (
     <section aria-labelledby="cta-heading" className="py-20 px-4 max-w-4xl mx-auto">
       <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        whileInView={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.6 }}
-        viewport={{ once: true }}
+        variants={cardReveal}
+        initial="hidden"
+        whileInView="visible"
+        viewport={sectionViewport}
         className="bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/30 rounded-3xl p-12 text-center relative overflow-hidden"
       >
         {/* Background decoration */}
@@ -76,10 +77,7 @@ function CTAContent({ variant }: { variant: CtaVariantId }) {
 
         {badge && (
           <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-            viewport={{ once: true }}
+            variants={sectionReveal}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-primary/30 bg-primary/10 mb-6"
           >
             <span className="w-2 h-2 rounded-full bg-primary" aria-hidden="true" />
@@ -89,30 +87,21 @@ function CTAContent({ variant }: { variant: CtaVariantId }) {
 
         <motion.h2
           id="cta-heading"
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-          viewport={{ once: true }}
+          variants={sectionReveal}
           className="text-4xl sm:text-5xl font-bold text-foreground mb-4"
         >
           {heading}
         </motion.h2>
 
         <motion.p
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.1 }}
-          viewport={{ once: true }}
+          variants={sectionReveal}
           className="text-lg text-muted-foreground mb-8 max-w-2xl mx-auto"
         >
           {description}
         </motion.p>
 
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.2 }}
-          viewport={{ once: true }}
+          variants={sectionReveal}
           className="flex flex-col sm:flex-row gap-4 justify-center items-center"
         >
           {actions.map((action) => (
@@ -138,10 +127,7 @@ function CTAContent({ variant }: { variant: CtaVariantId }) {
 
         {footnote && (
           <motion.p
-            initial={{ opacity: 0 }}
-            whileInView={{ opacity: 1 }}
-            transition={{ duration: 0.6, delay: 0.3 }}
-            viewport={{ once: true }}
+            variants={sectionReveal}
             className="text-sm text-muted-foreground mt-8"
           >
             {footnote}
