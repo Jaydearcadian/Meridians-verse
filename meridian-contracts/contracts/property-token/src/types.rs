@@ -87,7 +87,13 @@
 
     /// Per-account sliding window state for abusive caller detection.
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct ErrorRateState {
@@ -97,7 +103,13 @@
 
     /// Aggregated error telemetry exposed by the contract.
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct ErrorStats {
@@ -183,6 +195,29 @@
         pub proceeds: u128,
     }
 
+    #[derive(
+        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+    )]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct PendingCodeHash {
+        pub code_hash: Hash,
+        pub proposed_at: u64,
+        pub executable_at: u64,
+        pub proposer: AccountId,
+    }
+
+    #[derive(
+        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+    )]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct CodeHashChange {
+        pub code_hash: Hash,
+        pub proposed_at: u64,
+        pub committed_at: u64,
+        pub proposer: AccountId,
+        pub committer: AccountId,
+    }
+
     // Events for tracking property token operations
     #[ink(event)]
     pub struct Transfer {
@@ -241,6 +276,24 @@
         pub verified: bool,
         #[ink(topic)]
         pub verifier: AccountId,
+    }
+
+    #[ink(event)]
+    pub struct CodeHashProposed {
+        #[ink(topic)]
+        pub code_hash: Hash,
+        pub executable_at: u64,
+        #[ink(topic)]
+        pub proposer: AccountId,
+    }
+
+    #[ink(event)]
+    pub struct CodeHashCommitted {
+        #[ink(topic)]
+        pub code_hash: Hash,
+        pub committed_at: u64,
+        #[ink(topic)]
+        pub committer: AccountId,
     }
 
     #[ink(event)]
@@ -400,4 +453,3 @@
         pub amount: u128,
         pub price_per_share: u128,
     }
-
