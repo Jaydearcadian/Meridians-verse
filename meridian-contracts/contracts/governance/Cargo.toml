@@ -24,8 +24,9 @@ stellar-insured-policy = { path = "../policy", features = ["testutils"] }
 [lib]
 name = "stellar_insured_governance"
 path = "src/lib.rs"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["std"]
 std = ["soroban-sdk/testutils"]
+testutils = ["soroban-sdk/testutils"]

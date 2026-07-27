@@ -1214,8 +1214,13 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 name = "stellar-insured-claims"
 version = "1.0.0"
 dependencies = [
+ "propchain-escrow",
  "soroban-sdk",
+ "stellar-insured-governance",
  "stellar-insured-lib",
+ "stellar-insured-policy",
+ "stellar-insured-risk-pool",
+ "stellar-insured-slashing",
 ]
 
 [[package]]

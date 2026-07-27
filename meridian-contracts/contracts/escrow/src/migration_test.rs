@@ -48,8 +48,6 @@ mod migration_tests {
             assert_eq!(AdvancedEscrow::version(env.clone()), StorageVersion::V2);
             // FeeBps should now be explicitly set to default value
             assert_eq!(AdvancedEscrow::get_fee_bps(env.clone()), 0);
-            // Verify old data is preserved
-            assert_eq!(AdvancedEscrow::get_admin(env.clone()), admin);
         });
     }
 

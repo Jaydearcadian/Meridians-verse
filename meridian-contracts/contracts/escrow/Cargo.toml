@@ -21,4 +21,9 @@ soroban-sdk = { workspace = true, features = ["testutils"] }
 [lib]
 name = "propchain_escrow"
 path = "src/lib.rs"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["std"]
+std = ["soroban-sdk/testutils"]
+testutils = ["soroban-sdk/testutils"]

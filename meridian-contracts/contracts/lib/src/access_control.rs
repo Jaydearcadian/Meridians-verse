@@ -8,6 +8,8 @@ pub enum AccessControlRole {
     Governance,
     Claims,
     Policy,
+    RiskPool,
+    Slashing,
 }
 
 /// Storage key for the role map: (contract_address, role) -> bool

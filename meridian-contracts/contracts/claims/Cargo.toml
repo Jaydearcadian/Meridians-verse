@@ -11,11 +11,20 @@ publish = false
 soroban-sdk = { workspace = true }
 stellar-insured-lib = { path = "../lib" }
 
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+stellar-insured-policy = { path = "../policy", features = ["testutils"] }
+stellar-insured-risk-pool = { path = "../risk_pool", features = ["testutils"] }
+stellar-insured-governance = { path = "../governance", features = ["testutils"] }
+stellar-insured-slashing = { path = "../slashing", features = ["testutils"] }
+propchain-escrow = { path = "../escrow", features = ["testutils"] }
+
 [lib]
 name = "stellar_insured_claims"
 path = "src/lib.rs"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["std"]
 std = ["soroban-sdk/testutils"]
+testutils = ["soroban-sdk/testutils"]

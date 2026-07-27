@@ -238,17 +238,7 @@ impl RiskPoolContract {
 
     pub fn migrate(env: Env, admin: Address, to_version: StorageVersion) -> Result<(), RiskPoolError> {
         admin.require_auth();
-        
-        // Check if caller is admin (similar to escrow pattern)
-        let stored_admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(RiskPoolError::AlreadyInitialized)?;
-        
-        if admin != stored_admin {
-            return Err(RiskPoolError::AlreadyInitialized);
-        }
+        access_control::require_role(&env, &admin, &AccessControlRole::Admin);
 
         let current_version: StorageVersion = env
             .storage()
