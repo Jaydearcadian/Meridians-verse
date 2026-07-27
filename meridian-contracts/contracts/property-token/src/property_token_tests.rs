@@ -628,3 +628,173 @@
                 "duplicate should be blocked after retry recovery"
             );
         }
+
+        fn advance_blocks(n: u32) {
+            for _ in 0..n {
+                test::advance_block::<DefaultEnvironment>();
+            }
+        }
+
+        #[ink::test]
+        fn test_expired_bridge_sign_rejected_and_slot_freed() {
+            let accounts = test::default_accounts::<DefaultEnvironment>();
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let mut contract = setup_contract();
+            let token_id = setup_bridge_ready_token(&mut contract);
+
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let request_id = contract
+                .initiate_bridge_multisig(token_id, 2, accounts.bob, 2, Some(2))
+                .expect("initiate should succeed");
+
+            // Expire the request
+            advance_blocks(3);
+
+            test::set_caller::<DefaultEnvironment>(accounts.bob);
+            let result = contract.sign_bridge_request(request_id, true);
+            assert_eq!(result, Err(Error::RequestExpired));
+
+            // Pending slot freed — token can be re-bridged
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let again = contract.initiate_bridge_multisig(token_id, 2, accounts.bob, 2, Some(10));
+            assert!(again.is_ok(), "re-bridge after expiry should succeed");
+        }
+
+        #[ink::test]
+        fn test_expired_bridge_execute_rejected_and_token_unlocked() {
+            let accounts = test::default_accounts::<DefaultEnvironment>();
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let mut contract = setup_contract();
+            let token_id = setup_bridge_ready_token(&mut contract);
+
+            // Quorum 2: alice (admin/operator) + bob
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let request_id = contract
+                .initiate_bridge_multisig(token_id, 2, accounts.charlie, 2, Some(5))
+                .expect("initiate should succeed");
+
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            contract
+                .sign_bridge_request(request_id, true)
+                .expect("alice sign");
+            test::set_caller::<DefaultEnvironment>(accounts.bob);
+            contract
+                .sign_bridge_request(request_id, true)
+                .expect("bob sign — should lock");
+
+            // Token is locked to zero address
+            assert_eq!(
+                contract.owner_of(token_id),
+                Some(AccountId::from([0u8; 32]))
+            );
+
+            advance_blocks(6);
+
+            test::set_caller::<DefaultEnvironment>(accounts.bob);
+            let exec = contract.execute_bridge(request_id);
+            assert_eq!(exec, Err(Error::RequestExpired));
+
+            // Token restored to original sender (alice)
+            assert_eq!(contract.owner_of(token_id), Some(accounts.alice));
+            assert!(contract.balance_of(accounts.alice) >= 1);
+
+            // Can initiate a new bridge
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let again = contract.initiate_bridge_multisig(token_id, 2, accounts.charlie, 2, Some(10));
+            assert!(again.is_ok(), "re-bridge after expired execute should succeed");
+        }
+
+        #[ink::test]
+        fn test_duplicate_operator_signature_rejected() {
+            let accounts = test::default_accounts::<DefaultEnvironment>();
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let mut contract = setup_contract();
+            let token_id = setup_bridge_ready_token(&mut contract);
+
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let request_id = contract
+                .initiate_bridge_multisig(token_id, 2, accounts.bob, 2, Some(50))
+                .expect("initiate should succeed");
+
+            test::set_caller::<DefaultEnvironment>(accounts.bob);
+            contract
+                .sign_bridge_request(request_id, true)
+                .expect("first sign should succeed");
+
+            let dup = contract.sign_bridge_request(request_id, true);
+            assert_eq!(dup, Err(Error::AlreadySigned));
+        }
+
+        #[ink::test]
+        fn test_operator_rotation_mid_request_quorum() {
+            let accounts = test::default_accounts::<DefaultEnvironment>();
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let mut contract = setup_contract();
+            let token_id = setup_bridge_ready_token(&mut contract);
+
+            // Add charlie so we can rotate bob out while keeping min_signatures floor
+            test::set_caller::<DefaultEnvironment>(contract.admin());
+            contract
+                .add_bridge_operator(accounts.charlie)
+                .expect("add charlie");
+
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let request_id = contract
+                .initiate_bridge_multisig(token_id, 2, accounts.django, 2, Some(50))
+                .expect("initiate should succeed");
+
+            // Bob votes once, then is removed — his vote must not count
+            test::set_caller::<DefaultEnvironment>(accounts.bob);
+            contract
+                .sign_bridge_request(request_id, true)
+                .expect("bob sign");
+
+            test::set_caller::<DefaultEnvironment>(contract.admin());
+            contract
+                .remove_bridge_operator(accounts.bob)
+                .expect("remove bob while alice+charlie remain");
+
+            // Still pending — one current-operator vote needed from charlie + alice
+            let status = contract
+                .monitor_bridge_status(request_id)
+                .expect("status");
+            assert_eq!(status.signatures_collected, 0);
+            assert_eq!(status.status, BridgeOperationStatus::Pending);
+
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            contract
+                .sign_bridge_request(request_id, true)
+                .expect("alice sign");
+            test::set_caller::<DefaultEnvironment>(accounts.charlie);
+            contract
+                .sign_bridge_request(request_id, true)
+                .expect("charlie sign — should lock");
+
+            let status = contract
+                .monitor_bridge_status(request_id)
+                .expect("status after lock");
+            assert_eq!(status.status, BridgeOperationStatus::Locked);
+            assert_eq!(status.signatures_collected, 2);
+
+            test::set_caller::<DefaultEnvironment>(accounts.charlie);
+            contract
+                .execute_bridge(request_id)
+                .expect("execute with current-operator quorum");
+        }
+
+        #[ink::test]
+        fn test_remove_operator_respects_min_signatures_floor() {
+            let accounts = test::default_accounts::<DefaultEnvironment>();
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let mut contract = setup_contract();
+            let _token_id = setup_bridge_ready_token(&mut contract);
+            // Operators: alice (deployer) + bob = 2, min_signatures_required = 2
+
+            test::set_caller::<DefaultEnvironment>(contract.admin());
+            let result = contract.remove_bridge_operator(accounts.bob);
+            assert_eq!(
+                result,
+                Err(Error::InsufficientSignatures),
+                "cannot drop below min_signatures_required"
+            );
+        }
