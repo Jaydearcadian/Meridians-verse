@@ -5,10 +5,8 @@
     pub type ChainId = u64;
 
     /// Ownership transfer record
-    #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(Debug, Clone, PartialEq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
     pub struct OwnershipTransfer {
         pub from: AccountId,
         pub to: AccountId,
@@ -17,10 +15,8 @@
     }
 
     /// Compliance information
-    #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(Debug, Clone, PartialEq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
     pub struct ComplianceInfo {
         pub verified: bool,
         pub verification_date: u64,
@@ -29,10 +25,8 @@
     }
 
     /// Legal document information
-    #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(Debug, Clone, PartialEq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
     pub struct DocumentInfo {
         pub document_hash: Hash,
         pub document_type: String,
@@ -41,10 +35,8 @@
     }
 
     /// Bridged token information
-    #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(Debug, Clone, PartialEq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
     pub struct BridgedTokenInfo {
         pub original_chain: ChainId,
         pub original_token_id: TokenId,
@@ -55,10 +47,8 @@
     }
 
     /// Bridging status enum
-    #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(Debug, Clone, PartialEq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
     pub enum BridgingStatus {
         Locked,
         Pending,
@@ -70,10 +60,8 @@
     }
 
     /// Error log entry for monitoring and debugging
-    #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(Debug, Clone, PartialEq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
     pub struct ErrorLogEntry {
         pub log_id: u64,
         pub error_code: String,
@@ -86,6 +74,8 @@
     }
 
     /// Per-account sliding window state for abusive caller detection.
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
     #[derive(
         Debug,
         Clone,
@@ -102,6 +92,8 @@
     }
 
     /// Aggregated error telemetry exposed by the contract.
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
     #[derive(
         Debug,
         Clone,
@@ -123,16 +115,8 @@
         pub is_rate_limited: bool,
     }
 
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        scale::Encode,
-        scale::Decode,
-        ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
     pub struct Proposal {
         pub id: u64,
         pub token_id: TokenId,
@@ -144,16 +128,8 @@
         pub created_at: u64,
     }
 
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        scale::Encode,
-        scale::Decode,
-        ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
     pub enum ProposalStatus {
         Open,
         Executed,
@@ -161,16 +137,8 @@
         Closed,
     }
 
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        scale::Encode,
-        scale::Decode,
-        ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
     pub struct Ask {
         pub token_id: TokenId,
         pub seller: AccountId,
@@ -179,16 +147,8 @@
         pub created_at: u64,
     }
 
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        scale::Encode,
-        scale::Decode,
-        ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
     pub struct TaxRecord {
         pub dividends_received: u128,
         pub shares_sold: u128,

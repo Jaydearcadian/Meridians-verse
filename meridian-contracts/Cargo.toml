@@ -8,6 +8,10 @@ members = [
     "contracts/slashing",
     "contracts/escrow",
 ]
+exclude = [
+    "contracts/property-token",
+    "contracts/traits",
+]
 resolver = "2"
 
 [workspace.package]
