@@ -13,8 +13,13 @@ stellar-insured-lib = { path = "../lib" }
 
 [dev-dependencies]
 # #601: cross-contract integration tests for the slashing execution pipeline.
-stellar-insured-slashing = { path = "../slashing" }
-stellar-insured-risk-pool = { path = "../risk_pool" }
+# `testutils` is required so these crates' ContractFunctionSet impls (used by
+# env.register_contract in tests) are compiled in, since they're built here as
+# plain dependencies rather than with --test.
+stellar-insured-slashing = { path = "../slashing", features = ["testutils"] }
+stellar-insured-risk-pool = { path = "../risk_pool", features = ["testutils"] }
+# #609: cross-contract integration tests for the policy-change execution pipeline.
+stellar-insured-policy = { path = "../policy", features = ["testutils"] }
 
 [lib]
 name = "stellar_insured_governance"

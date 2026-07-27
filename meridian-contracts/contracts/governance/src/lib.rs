@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, Symbol, IntoVal};
-use stellar_insured_lib::{Proposal, GovernanceAction, GovernanceError};
+use stellar_insured_lib::{Proposal, GovernanceAction, GovernanceError, PolicyPatch};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 
 #[contracttype]
@@ -283,6 +283,55 @@ impl GovernanceContract {
         Ok(counter)
     }
 
+    // #609: Create governance proposal for a DAO-controlled policy change
+    pub fn create_policy_change_proposal(
+        env: Env,
+        creator: Address,
+        policy_id: u64,
+        patch: PolicyPatch,
+        threshold: u32,
+    ) -> Result<u64, GovernanceError> {
+        creator.require_auth();
+
+        let title = String::from_str(&env, "Policy Change Proposal");
+        let description = String::from_str(&env, "DAO vote required for policy parameter change");
+        let execution_data = String::from_str(&env, "policy_change");
+
+        let mut counter = get_proposal_counter(&env);
+        counter += 1;
+        env.storage().instance().set(&DataKey::ProposalCounter, &counter);
+
+        let voting_period: u64 = env.storage().instance().get(&DataKey::VotingPeriod)
+            .ok_or(GovernanceError::NotInitialized)?;
+
+        let proposal = Proposal {
+            id: counter,
+            title,
+            description,
+            execution_data,
+            creator: creator.clone(),
+            expires_at: env.ledger().timestamp() + voting_period,
+            threshold_percentage: threshold,
+            yes_votes: 0,
+            no_votes: 0,
+            is_finalized: false,
+            is_executed: false,
+        };
+
+        set_proposal(&env, counter, &proposal);
+
+        // Store the governance action
+        let action = GovernanceAction::PolicyChange(policy_id, patch);
+        env.storage().persistent().set(&DataKey::GovernanceActionPending(counter), &action);
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("pol_prop")),
+            (counter, policy_id, creator),
+        );
+
+        Ok(counter)
+    }
+
     pub fn vote(env: Env, voter: Address, proposal_id: u64, weight: i128, is_yes: bool) -> Result<(), GovernanceError> {
         voter.require_auth();
 
@@ -379,14 +428,15 @@ impl GovernanceContract {
                         soroban_sdk::vec![&env, recipient.into_val(&env), amount.into_val(&env)],
                     );
                 }
-                GovernanceAction::PolicyChange(policy_id) => {
-                    // Handle policy change through policy contract
+                GovernanceAction::PolicyChange(policy_id, patch) => {
+                    // #609: apply the DAO-approved patch through the policy
+                    // contract's governance-gated entry point.
                     let policy_contract: Address = env.storage().instance().get(&DataKey::PolicyContract)
                         .ok_or(GovernanceError::PolicyContractNotSet)?;
                     env.invoke_contract::<()>(
                         &policy_contract,
-                        &symbol_short!("update"),
-                        soroban_sdk::vec![&env, policy_id.into_val(&env)],
+                        &Symbol::new(&env, "apply_governance_update"),
+                        soroban_sdk::vec![&env, policy_id.into_val(&env), patch.into_val(&env)],
                     );
                 }
                 GovernanceAction::Slashing(target, role, amount) => {
@@ -728,5 +778,147 @@ mod slashing_pipeline_tests {
         assert_eq!(pool.get_provider_info(&h.target), INITIAL_STAKE);
         assert_eq!(pool.get_pool_stats().available_capital, INITIAL_STAKE);
         assert_eq!(slashing.get_violation_count(&h.target, &h.role), 0);
+    }
+}
+
+// #609: end-to-end policy-change pipeline (Governance -> Policy).
+#[cfg(test)]
+mod policy_change_pipeline_tests {
+    use super::{GovernanceContract, GovernanceContractClient};
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
+    use soroban_sdk::{Address, Env};
+    use stellar_insured_lib::access_control::AccessControlRole;
+    use stellar_insured_lib::{PolicyPatch, PolicyStatus, PolicyType, StatusPatch};
+    use stellar_insured_policy::{PolicyContract, PolicyContractClient};
+
+    const VOTING_PERIOD: u64 = 1000;
+
+    // Holds only owned values so tests build their own clients from `env` +
+    // the contract ids (avoids a self-referential struct).
+    struct Harness {
+        env: Env,
+        gov_id: Address,
+        policy_id: Address,
+        policy_record_id: u64,
+        creator: Address,
+        voter: Address,
+    }
+
+    impl Harness {
+        fn gov(&self) -> GovernanceContractClient<'_> {
+            GovernanceContractClient::new(&self.env, &self.gov_id)
+        }
+        fn policy(&self) -> PolicyContractClient<'_> {
+            PolicyContractClient::new(&self.env, &self.policy_id)
+        }
+        fn advance_past_voting_period(&self) {
+            self.env.ledger().with_mut(|li| {
+                li.timestamp += VOTING_PERIOD + 1;
+            });
+        }
+    }
+
+    fn setup() -> Harness {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let creator = Address::generate(&env);
+        let voter = Address::generate(&env);
+        let holder = Address::generate(&env);
+        let token = Address::generate(&env);
+        let slashing = Address::generate(&env);
+        let claims = Address::generate(&env);
+        let risk_pool = Address::generate(&env);
+
+        let gov_id = env.register_contract(None, GovernanceContract);
+        let policy_id = env.register_contract(None, PolicyContract);
+
+        let gov = GovernanceContractClient::new(&env, &gov_id);
+        let policy = PolicyContractClient::new(&env, &policy_id);
+
+        policy.initialize(&admin, &risk_pool);
+        // `issue_policy` / `set_governance_contract` gate on the *policy
+        // contract's own address* holding Admin (mirrors the slashing/risk_pool
+        // self-role pattern used by execute_slashing's Governance-role gate).
+        policy.set_role(&policy_id, &AccessControlRole::Admin);
+        policy.set_governance_contract(&gov_id);
+
+        gov.initialize(
+            &admin,
+            &token,
+            &slashing,
+            &VOTING_PERIOD,
+            &claims,
+            &risk_pool,
+            &policy_id,
+        );
+
+        let policy_record_id = policy.issue_policy(&holder, &1000, &100, &365, &PolicyType::Standard);
+
+        Harness {
+            env,
+            gov_id,
+            policy_id,
+            policy_record_id,
+            creator,
+            voter,
+        }
+    }
+
+    #[test]
+    fn passing_policy_change_proposal_patches_policy() {
+        let h = setup();
+        let gov = h.gov();
+        let policy = h.policy();
+
+        let patch = PolicyPatch {
+            coverage_amount: Some(2500),
+            premium_amount: None,
+            status: StatusPatch::Set(PolicyStatus::Cancelled),
+        };
+
+        let proposal_id = gov.create_policy_change_proposal(&h.creator, &h.policy_record_id, &patch, &50);
+        gov.vote(&h.voter, &proposal_id, &100, &true);
+
+        h.advance_past_voting_period();
+        gov.finalize_proposal(&proposal_id);
+        gov.execute_proposal(&proposal_id);
+
+        let updated = policy.get_policy(&h.policy_record_id);
+        assert_eq!(updated.coverage_amount, 2500);
+        assert_eq!(updated.status, PolicyStatus::Cancelled);
+    }
+
+    #[test]
+    fn failing_policy_change_proposal_leaves_policy_unchanged() {
+        let h = setup();
+        let gov = h.gov();
+        let policy = h.policy();
+
+        let patch = PolicyPatch {
+            coverage_amount: Some(2500),
+            premium_amount: None,
+            status: StatusPatch::Keep,
+        };
+
+        let proposal_id = gov.create_policy_change_proposal(&h.creator, &h.policy_record_id, &patch, &50);
+
+        // Vote no so the yes-threshold is not met.
+        gov.vote(&h.voter, &proposal_id, &100, &false);
+
+        h.advance_past_voting_period();
+        gov.finalize_proposal(&proposal_id);
+
+        // Execution must fail on the unmet threshold. A declared contract error
+        // surfaces as Ok(Err(_)); a host error as Err(_). Assert only that it did
+        // not succeed (which would be Ok(Ok(()))).
+        let result = gov.try_execute_proposal(&proposal_id);
+        assert!(!matches!(result, Ok(Ok(()))));
+
+        // No state changed anywhere in the pipeline.
+        let unchanged = policy.get_policy(&h.policy_record_id);
+        assert_eq!(unchanged.coverage_amount, 1000);
+        assert_eq!(unchanged.status, PolicyStatus::Active);
     }
 }
