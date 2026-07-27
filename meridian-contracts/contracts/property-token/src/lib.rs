@@ -12,6 +12,7 @@ use ink::prelude::{
     vec,
     vec::Vec,
 };
+use ink::prelude::string::String;
 use ink::storage::Mapping;
 use propchain_traits::*;
 
@@ -22,6 +23,7 @@ mod property_token {
     const MAX_ERROR_LOG: u64 = 50;
     const ERROR_WINDOW_DURATION_MS: u64 = 3_600_000;
     const DEFAULT_ERROR_LIMIT: u64 = 10;
+    const CODE_HASH_UPGRADE_DELAY_MS: u64 = 48 * 60 * 60 * 1000;
 
     /// Error types for the property token contract
     #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
@@ -57,6 +59,9 @@ mod property_token {
         InconsistentState,
         RateLimited,
         InvalidParameters,
+        GovernanceNotSet,
+        UpgradeNotProposed,
+        UpgradeTimelockActive,
     }
 
     /// Property Token contract that maintains compatibility with ERC-721 and ERC-1155
@@ -123,6 +128,10 @@ mod property_token {
         compliance_registry: Option<AccountId>,
         fee_manager: Option<AccountId>,
         tax_records: Mapping<(AccountId, TokenId), TaxRecord>,
+        governance: Option<AccountId>,
+        pending_code_hash: Option<PendingCodeHash>,
+        code_hash_history: Mapping<u64, CodeHashChange>,
+        code_hash_history_count: u64,
 
         // Gas estimation: per-chain overhead and cross-contract buffer (issue #461)
         chain_gas_overhead: Mapping<ChainId, u64>,
@@ -435,6 +444,10 @@ mod property_token {
                 compliance_registry: None,
                 fee_manager: None,
                 tax_records: Mapping::default(),
+                governance: None,
+                pending_code_hash: None,
+                code_hash_history: Mapping::default(),
+                code_hash_history_count: 0,
 
                 chain_gas_overhead: Mapping::default(),
                 cross_contract_gas_buffer_pct: 20,
@@ -468,7 +481,8 @@ mod property_token {
         /// ERC-721: Returns the balance of tokens owned by an account
         #[ink(message)]
         pub fn balance_of(&self, owner: AccountId) -> u32 {
-            self.ensure_non_zero_account(&owner).unwrap_or_else(|_| panic!("Zero address not allowed"));
+            self.ensure_non_zero_account(&owner)
+                .unwrap_or_else(|_| panic!("Zero address not allowed"));
             self.owner_token_count.get(owner).unwrap_or(0)
         }
 
@@ -486,6 +500,7 @@ mod property_token {
             to: AccountId,
             token_id: TokenId,
         ) -> Result<(), Error> {
+            self.ensure_not_paused()?;
             let caller = self.env().caller();
 
             // Collect fee for transfer
@@ -777,18 +792,106 @@ mod property_token {
             Ok(())
         }
 
-        /// Upgrades the contract code to the provided `code_hash`.
-        /// Only the admin can perform this operation.
+        /// Configure the external governance contract that authorizes code upgrades.
         #[ink(message)]
-        pub fn set_code_hash(&mut self, code_hash: Hash) -> Result<(), Error> {
-            let caller = self.env().caller();
-            if caller != self.admin {
-                return Err(Error::Unauthorized);
+        pub fn set_governance(&mut self, governance: AccountId) -> Result<(), Error> {
+            self.ensure_admin()?;
+            Self::ensure_non_zero_account(&governance)?;
+            self.governance = Some(governance);
+            Ok(())
+        }
+
+        /// Return the configured governance contract address, if any.
+        #[ink(message)]
+        pub fn governance(&self) -> Option<AccountId> {
+            self.governance
+        }
+
+        /// Deprecated direct upgrade entry point. Immediate upgrades are disabled.
+        #[ink(message)]
+        pub fn set_code_hash(&mut self, _code_hash: Hash) -> Result<(), Error> {
+            Err(Error::Unauthorized)
+        }
+
+        /// Propose a governance-approved code hash upgrade after the timelock expires.
+        #[ink(message)]
+        pub fn propose_code_hash(&mut self, code_hash: Hash) -> Result<(), Error> {
+            self.ensure_governance()?;
+            let now = self.env().block_timestamp();
+            let executable_at = now.saturating_add(CODE_HASH_UPGRADE_DELAY_MS);
+            self.pending_code_hash = Some(PendingCodeHash {
+                code_hash,
+                proposed_at: now,
+                executable_at,
+                proposer: self.env().caller(),
+            });
+            self.bridge_config.emergency_pause = true;
+            self.env().emit_event(CodeHashProposed {
+                code_hash,
+                executable_at,
+                proposer: self.env().caller(),
+            });
+            Ok(())
+        }
+
+        /// Commit the pending code hash upgrade once the timelock has elapsed.
+        #[ink(message)]
+        pub fn commit_code_hash(&mut self) -> Result<(), Error> {
+            self.ensure_governance()?;
+            let pending = self
+                .pending_code_hash
+                .clone()
+                .ok_or(Error::UpgradeNotProposed)?;
+            let now = self.env().block_timestamp();
+            if now < pending.executable_at {
+                return Err(Error::UpgradeTimelockActive);
             }
             self.env()
-                .set_code_hash(&code_hash)
+                .set_code_hash(&pending.code_hash)
                 .map_err(|_| Error::InvalidRequest)?;
+            let index = self.code_hash_history_count;
+            self.code_hash_history.insert(
+                index,
+                &CodeHashChange {
+                    code_hash: pending.code_hash,
+                    proposed_at: pending.proposed_at,
+                    committed_at: now,
+                    proposer: pending.proposer,
+                    committer: self.env().caller(),
+                },
+            );
+            self.code_hash_history_count = index.saturating_add(1);
+            self.pending_code_hash = None;
+            self.env().emit_event(CodeHashCommitted {
+                code_hash: pending.code_hash,
+                committed_at: now,
+                committer: self.env().caller(),
+            });
             Ok(())
+        }
+
+        /// Return the active pending code hash proposal, if any.
+        #[ink(message)]
+        pub fn pending_code_hash(&self) -> Option<PendingCodeHash> {
+            self.pending_code_hash.clone()
+        }
+
+        /// Return a committed code hash history entry by index.
+        #[ink(message)]
+        pub fn code_hash_history(&self, index: u64) -> Option<CodeHashChange> {
+            self.code_hash_history.get(index)
+        }
+
+        /// Return the number of committed code hash upgrades.
+        #[ink(message)]
+        pub fn code_hash_history_count(&self) -> u64 {
+            self.code_hash_history_count
+        }
+
+        /// Return the fixed upgrade timelock delay in milliseconds.
+        #[ink(message)]
+        pub fn code_hash_upgrade_delay(&self) -> u64 {
+            CODE_HASH_UPGRADE_DELAY_MS
         }
 
         /// Return the total fractional shares issued for a property token.
@@ -876,6 +979,7 @@ mod property_token {
             token_id: TokenId,
             amount: u128,
         ) -> Result<(), Error> {
+            self.ensure_not_paused()?;
             if amount == 0 {
                 return Err(Error::InvalidAmount);
             }
@@ -1073,6 +1177,7 @@ mod property_token {
             price_per_share: u128,
             amount: u128,
         ) -> Result<(), Error> {
+            self.ensure_not_paused()?;
             if price_per_share == 0 || amount == 0 {
                 return Err(Error::InvalidAmount);
             }
@@ -1120,7 +1225,11 @@ mod property_token {
                 .insert((seller, token_id), &(bal.saturating_add(ask.amount)));
             self.escrowed_shares.insert((token_id, seller), &0u128);
             self.asks.remove((token_id, seller));
-            self.env().emit_event(AskCancelled { token_id, seller, escrowed_amount: esc });
+            self.env().emit_event(AskCancelled {
+                token_id,
+                seller,
+                escrowed_amount: esc,
+            });
             Ok(())
         }
 
@@ -1132,6 +1241,7 @@ mod property_token {
             seller: AccountId,
             amount: u128,
         ) -> Result<(), Error> {
+            self.ensure_not_paused()?;
             if amount == 0 {
                 return Err(Error::InvalidAmount);
             }
@@ -1249,19 +1359,28 @@ mod property_token {
             let scaling: u128 = 1_000_000_000_000;
             let current_dps = self.dividends_per_share.get(token_id).unwrap_or(0);
             // Retrieve the last checkpoint for this holder.
-            let checkpoint = self.dividend_checkpoint.get((account, token_id)).unwrap_or(0);
+            let checkpoint = self
+                .dividend_checkpoint
+                .get((account, token_id))
+                .unwrap_or(0);
             if current_dps > checkpoint {
                 let bal = self.balances.get((account, token_id)).unwrap_or(0);
                 let delta = current_dps.saturating_sub(checkpoint);
                 // Compute additional credit safely.
                 let add = self.safe_mul_div(bal, delta, scaling);
-                let owed = self.dividend_balance.get((account, token_id)).unwrap_or(0).saturating_add(add);
+                let owed = self
+                    .dividend_balance
+                    .get((account, token_id))
+                    .unwrap_or(0)
+                    .saturating_add(add);
                 self.dividend_balance.insert((account, token_id), &owed);
                 // Update the checkpoint to the latest per‑share value.
-                self.dividend_checkpoint.insert((account, token_id), &current_dps);
+                self.dividend_checkpoint
+                    .insert((account, token_id), &current_dps);
             } else if checkpoint == 0 && current_dps > 0 {
                 // First time the holder sees any dividends.
-                self.dividend_checkpoint.insert((account, token_id), &current_dps);
+                self.dividend_checkpoint
+                    .insert((account, token_id), &current_dps);
             }
             Ok(())
         }
@@ -1308,8 +1427,8 @@ mod property_token {
                 to: caller,
                 timestamp: self.env().block_timestamp(),
                 transaction_hash: {
-                    use scale::Encode;
                     use ink::env::hash::{Blake2x256, CryptoHash};
+                    use scale::Encode;
                     let data = (&caller, token_id);
                     let encoded = data.encode();
                     let mut hash_bytes = [0u8; 32];
@@ -1807,8 +1926,8 @@ mod property_token {
                 to: recipient,
                 timestamp: self.env().block_timestamp(),
                 transaction_hash: {
-                    use scale::Encode;
                     use ink::env::hash::{Blake2x256, CryptoHash};
+                    use scale::Encode;
                     let data = (&recipient, new_token_id);
                     let encoded = data.encode();
                     let mut hash_bytes = [0u8; 32];
@@ -1952,7 +2071,8 @@ mod property_token {
                     request.signatures.clear();
                     // Re-register in the O(1) pending lookup so duplicate-request
                     // guard in initiate_bridge_multisig remains accurate.
-                    self.token_pending_requests.insert(request.token_id, &request_id);
+                    self.token_pending_requests
+                        .insert(request.token_id, &request_id);
                 }
                 RecoveryAction::CancelBridge => {
                     // Mark as cancelled and unlock token
@@ -2256,8 +2376,8 @@ mod property_token {
                 to,
                 timestamp: self.env().block_timestamp(),
                 transaction_hash: {
-                    use scale::Encode;
                     use ink::env::hash::{Blake2x256, CryptoHash};
+                    use scale::Encode;
                     let data = (&from, &to, token_id);
                     let encoded = data.encode();
                     let mut hash_bytes = [0u8; 32];
@@ -2385,10 +2505,7 @@ mod property_token {
         fn current_error_rate_state(&self, account: &AccountId, timestamp: u64) -> ErrorRateState {
             match self.error_rates.get(account) {
                 Some(state)
-                    if timestamp
-                        < state
-                            .window_start
-                            .saturating_add(ERROR_WINDOW_DURATION_MS) =>
+                    if timestamp < state.window_start.saturating_add(ERROR_WINDOW_DURATION_MS) =>
                 {
                     state
                 }
@@ -2593,6 +2710,8 @@ mod property_token {
         ) -> Result<Vec<u8>, MigrationError> {
             self.ensure_admin()
                 .map_err(|_| MigrationError::Unauthorized)?;
+        ) -> Result<Vec<u8>, Error> {
+            self.ensure_admin()?;
             Ok(Vec::new())
         }
 
@@ -2608,6 +2727,33 @@ mod property_token {
         #[ink(message)]
         fn verify_migration(&self) -> Result<bool, MigrationError> {
             Ok(true)
+        }
+    }
+
+    impl PropertyToken {
+        /// Require the caller to be the token admin for privileged operations.
+        fn ensure_admin(&self) -> Result<(), Error> {
+            if self.env().caller() != self.admin {
+                return Err(Error::Unauthorized);
+            }
+            Ok(())
+        }
+
+        /// Require the caller to be the configured governance contract.
+        fn ensure_governance(&self) -> Result<(), Error> {
+            match self.governance {
+                Some(governance) if self.env().caller() == governance => Ok(()),
+                Some(_) => Err(Error::Unauthorized),
+                None => Err(Error::GovernanceNotSet),
+            }
+        }
+
+        /// Halt user-facing token and share movement while emergency pause is active.
+        fn ensure_not_paused(&self) -> Result<(), Error> {
+            if self.bridge_config.emergency_pause {
+                return Err(Error::BridgePaused);
+            }
+            Ok(())
         }
     }
 }

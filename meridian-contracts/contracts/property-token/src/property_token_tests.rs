@@ -796,5 +796,120 @@
                 result,
                 Err(Error::InsufficientSignatures),
                 "cannot drop below min_signatures_required"
+        #[ink::test]
+        fn admin_direct_code_hash_upgrade_is_blocked() {
+            let accounts = test::default_accounts::<DefaultEnvironment>();
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let mut contract = setup_contract();
+
+            let result = contract.set_code_hash(Hash::from([9u8; 32]));
+
+            assert_eq!(result, Err(Error::Unauthorized));
+            assert_eq!(contract.code_hash_history_count(), 0);
+            assert!(contract.pending_code_hash().is_none());
+        }
+
+        #[ink::test]
+        fn governance_proposal_pauses_until_timelocked_commit() {
+            let accounts = test::default_accounts::<DefaultEnvironment>();
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let mut contract = setup_contract();
+            let governance = accounts.bob;
+            let new_hash = Hash::from([7u8; 32]);
+
+            contract
+                .set_governance(governance)
+                .expect("admin should configure governance");
+
+            test::set_block_timestamp::<DefaultEnvironment>(1_000);
+            test::set_caller::<DefaultEnvironment>(governance);
+            contract
+                .propose_code_hash(new_hash)
+                .expect("governance should propose code hash");
+
+            let pending = contract
+                .pending_code_hash()
+                .expect("proposal should be stored");
+            assert_eq!(pending.code_hash, new_hash);
+            assert_eq!(
+                pending.executable_at,
+                1_000 + contract.code_hash_upgrade_delay()
+            );
+            assert!(contract.get_bridge_config().emergency_pause);
+            assert_eq!(
+                contract.commit_code_hash(),
+                Err(Error::UpgradeTimelockActive)
+            );
+
+            test::set_block_timestamp::<DefaultEnvironment>(pending.executable_at);
+            assert_eq!(contract.commit_code_hash(), Ok(()));
+            assert!(contract.pending_code_hash().is_none());
+            assert_eq!(contract.code_hash_history_count(), 1);
+
+            let history = contract
+                .code_hash_history(0)
+                .expect("committed upgrade should be recorded");
+            assert_eq!(history.code_hash, new_hash);
+            assert_eq!(history.proposer, governance);
+            assert_eq!(history.committer, governance);
+        }
+
+        #[ink::test]
+        fn non_governance_cannot_propose_or_commit_code_hash() {
+            let accounts = test::default_accounts::<DefaultEnvironment>();
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let mut contract = setup_contract();
+
+            assert_eq!(
+                contract.propose_code_hash(Hash::from([3u8; 32])),
+                Err(Error::GovernanceNotSet)
+            );
+
+            contract
+                .set_governance(accounts.bob)
+                .expect("admin should configure governance");
+
+            test::set_caller::<DefaultEnvironment>(accounts.charlie);
+            assert_eq!(
+                contract.propose_code_hash(Hash::from([3u8; 32])),
+                Err(Error::Unauthorized)
+            );
+            assert_eq!(contract.commit_code_hash(), Err(Error::Unauthorized));
+        }
+
+        #[ink::test]
+        fn code_hash_proposal_pause_blocks_token_transfer() {
+            let accounts = test::default_accounts::<DefaultEnvironment>();
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            let mut contract = setup_contract();
+
+            let metadata = PropertyMetadata {
+                location: String::from("Upgrade Guard Ave"),
+                size: 1000,
+                legal_description: String::from("Paused transfer test property"),
+                valuation: 500000,
+                documents_url: String::from("ipfs://upgrade-guard"),
+            };
+            let token_id = contract
+                .register_property_with_token(metadata)
+                .expect("registration should succeed");
+
+            test::set_caller::<DefaultEnvironment>(contract.admin());
+            contract
+                .verify_compliance(token_id, true)
+                .expect("compliance verification should succeed");
+            contract
+                .set_governance(accounts.bob)
+                .expect("admin should configure governance");
+
+            test::set_caller::<DefaultEnvironment>(accounts.bob);
+            contract
+                .propose_code_hash(Hash::from([5u8; 32]))
+                .expect("governance should propose code hash");
+
+            test::set_caller::<DefaultEnvironment>(accounts.alice);
+            assert_eq!(
+                contract.transfer_from(accounts.alice, accounts.charlie, token_id),
+                Err(Error::BridgePaused)
             );
         }

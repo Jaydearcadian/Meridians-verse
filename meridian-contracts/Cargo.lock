@@ -1224,6 +1224,7 @@ version = "1.0.0"
 dependencies = [
  "soroban-sdk",
  "stellar-insured-lib",
+ "stellar-insured-policy",
  "stellar-insured-risk-pool",
  "stellar-insured-slashing",
 ]
