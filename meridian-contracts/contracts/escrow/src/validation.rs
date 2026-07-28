@@ -62,14 +62,3 @@ pub fn require_valid_multisig(required_signatures: u32, participant_count: u32) 
     }
     Ok(())
 }
-
-/// Reads and returns the stored admin address.
-///
-/// Centralises the admin lookup so callers avoid a raw `.get(&DataKey::Admin)`
-/// scattered across functions — one read, one place (#353, #351).
-pub fn get_admin(env: &Env) -> Address {
-    env.storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .expect("Not initialized")
-}

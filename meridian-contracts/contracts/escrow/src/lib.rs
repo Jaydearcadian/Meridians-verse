@@ -9,11 +9,12 @@ mod migration_test;
 
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
 use stellar_insured_lib::{EscrowError, ValidationError};
+use stellar_insured_lib::access_control::{self, AccessControlRole};
 
 use storage::{DataKey, StorageVersion};
 use types::{ApprovalType, EscrowData, EscrowStatus, MultiSigConfig};
 use validation::{
-    get_admin, require_future_timestamp, require_non_zero_address, require_non_zero_u64,
+    require_future_timestamp, require_non_zero_address, require_non_zero_u64,
     require_not_paused, require_positive_amount, require_valid_multisig,
 };
 
@@ -38,6 +39,8 @@ impl AdvancedEscrow {
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::FeeBps, &0u32);
 
+        access_control::init_access_control(&env, &admin);
+
         env.events()
             .publish((symbol_short!("escrow"), symbol_short!("init")), admin);
         Ok(())
@@ -46,10 +49,7 @@ impl AdvancedEscrow {
     pub fn set_pause(env: Env, admin: Address, paused: bool) -> Result<(), EscrowError> {
         admin.require_auth();
         require_non_zero_address(&admin).map_err(|_| EscrowError::Unauthorized)?;
-        // Use shared helper to read admin — one read, no duplication (#351, #353).
-        if admin != get_admin(&env) {
-            return Err(EscrowError::Unauthorized);
-        }
+        access_control::require_role(&env, &admin, &AccessControlRole::Admin);
         env.storage().instance().set(&DataKey::Paused, &paused);
 
         env.events()
@@ -280,9 +280,7 @@ impl AdvancedEscrow {
     pub fn migrate(env: Env, admin: Address, to_version: StorageVersion) -> Result<(), EscrowError> {
         admin.require_auth();
         require_non_zero_address(&admin).map_err(|_| EscrowError::Unauthorized)?;
-        if admin != get_admin(&env) {
-            return Err(EscrowError::Unauthorized);
-        }
+        access_control::require_role(&env, &admin, &AccessControlRole::Admin);
 
         let current_version: StorageVersion = env
             .storage()
@@ -332,11 +330,9 @@ impl AdvancedEscrow {
             .unwrap_or(0)
     }
 
-    pub fn get_admin(env: Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .expect("Contract not initialized")
+    pub fn set_role(env: Env, addr: Address, role: AccessControlRole) -> Result<(), EscrowError> {
+        access_control::set_role(&env, &env.current_contract_address(), &addr, role);
+        Ok(())
     }
 
     pub fn is_paused(env: Env) -> bool {
