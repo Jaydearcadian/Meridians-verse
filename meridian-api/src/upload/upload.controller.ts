@@ -27,7 +27,10 @@ export class UploadController {
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a file asset' })
   @ApiResponse({ status: 201, description: 'File successfully uploaded' })
-  @ApiResponse({ status: 400, description: 'Bad request – invalid file type, size, or content' })
+  @ApiResponse({
+    status: 400,
+    description: 'Bad request – invalid file type, size, or content',
+  })
   @ApiBody({
     schema: {
       type: 'object',

@@ -9,12 +9,17 @@ publish = false
 
 [dependencies]
 soroban-sdk = { workspace = true }
+stellar-insured-lib = { path = "../lib" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
 
 [lib]
 name = "stellar_insured_risk_pool"
 path = "src/lib.rs"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["std"]
 std = ["soroban-sdk/testutils"]
+testutils = ["soroban-sdk/testutils"]

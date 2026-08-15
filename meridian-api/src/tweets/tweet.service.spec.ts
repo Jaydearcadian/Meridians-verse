@@ -1,230 +1,110 @@
-﻿import { renderHook, act, waitFor } from '@testing-library/react';
-import { useWallet } from '../useWallet';
-import { useWalletStore } from '@/store';
-import { connectFreighter, signFreighterMessage, createAuthMessage } from '@/lib/freighter';
-import { errorHandler } from '@/lib/errorHandler';
+import { Test, TestingModule } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { TweetService } from './tweet.service';
+import { Tweet } from './entities/tweet.entity';
+import { UserService } from 'src/users/providers/user.services';
+import { NotFoundException } from '@nestjs/common';
 
-// ── Mocks ───────────────────────────────────────────────────
-jest.mock('@/store', () => ({ useWalletStore: jest.fn() }));
-jest.mock('@/lib/freighter', () => ({
-  connectFreighter: jest.fn(),
-  signFreighterMessage: jest.fn(),
-  createAuthMessage: jest.fn(),
-}));
-jest.mock('@/lib/errorHandler', () => ({
-  errorHandler: { createError: jest.fn(() => ({ message: 'error', userActionable: true })) },
-}));
-jest.mock('@/hooks/useErrorHandler', () => ({
-  useWalletErrorHandler: jest.fn(() => ({
-    executeWithErrorHandling: jest.fn((fn) => fn()),
-    handleError: jest.fn(),
-    showSuccessNotification: jest.fn(),
-    showErrorNotification: jest.fn(),
-    retryLastOperation: jest.fn(),
-    hasError: false,
-    canRetry: false,
-  })),
-}));
+describe('TweetService', () => {
+  let service: TweetService;
+  let tweetRepository: any;
+  let userService: any;
 
-const mockConnectFreighter = connectFreighter as jest.Mock;
-const mockSignFreighterMessage = signFreighterMessage as jest.Mock;
-const mockCreateAuthMessage = createAuthMessage as jest.Mock;
-const mockUseWalletStore = useWalletStore as jest.MockedFunction<typeof useWalletStore>;
+  beforeEach(async () => {
+    tweetRepository = {
+      find: jest.fn(),
+      create: jest.fn((dto) => dto),
+      save: jest.fn((tweet) => Promise.resolve({ id: 1, ...tweet })),
+      findOneBy: jest.fn(),
+      delete: jest.fn(),
+    };
 
-const makeWalletStoreMock = (overrides: Record<string, unknown> = {}) => ({
-  status: 'disconnected',
-  session: null,
-  error: null,
-  setStatus: jest.fn(),
-  setSession: jest.fn(),
-  setError: jest.fn(),
-  signOut: jest.fn(),
-  isAddressRegistered: jest.fn(() => false),
-  registerAddress: jest.fn(),
-  getRegisteredUser: jest.fn(),
-  startConnection: jest.fn(),
-  completeConnection: jest.fn(),
-  failConnection: jest.fn(),
-  ...overrides,
-});
+    userService = {
+      findOneById: jest.fn(),
+    };
 
-describe('useWallet', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    jest.useFakeTimers();
-    mockUseWalletStore.mockReturnValue(makeWalletStoreMock() as any);
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        TweetService,
+        {
+          provide: getRepositoryToken(Tweet),
+          useValue: tweetRepository,
+        },
+        {
+          provide: UserService,
+          useValue: userService,
+        },
+      ],
+    }).compile();
+
+    service = module.get<TweetService>(TweetService);
   });
 
-  afterEach(() => {
-    jest.runOnlyPendingTimers();
-    jest.useRealTimers();
+  it('should be defined', () => {
+    expect(service).toBeDefined();
   });
 
-  // ──────────────────────────────────────────────────────────
-  // Initial State
-  // ──────────────────────────────────────────────────────────
-  describe('Initial State', () => {
-    it('exposes status, session, and address from the store', () => {
-      const { result } = renderHook(() => useWallet());
+  describe('getAllTweet', () => {
+    it('should return tweets if user exists', async () => {
+      const tweets = [{ id: 1, text: 'Hello' }];
+      userService.findOneById.mockResolvedValue({ id: 7 });
+      tweetRepository.find.mockResolvedValue(tweets);
 
-      expect(result.current.status).toBe('disconnected');
-      expect(result.current.session).toBeNull();
-      expect(result.current.address).toBeUndefined();
-    });
-
-    it('exposes address from active session', () => {
-      mockUseWalletStore.mockReturnValue(
-        makeWalletStoreMock({
-          status: 'connected',
-          session: { address: 'GABCXYZ', expiresAt: Date.now() + 86400000 },
-        }) as any
-      );
-
-      const { result } = renderHook(() => useWallet());
-
-      expect(result.current.address).toBe('GABCXYZ');
-    });
-  });
-
-  // ──────────────────────────────────────────────────────────
-  // connectWallet
-  // ──────────────────────────────────────────────────────────
-  describe('connectWallet()', () => {
-    it('returns existing session without reconnecting', async () => {
-      const existingSession = { address: 'GABC', expiresAt: Date.now() + 86400000 };
-      mockUseWalletStore.mockReturnValue(
-        makeWalletStoreMock({ session: existingSession }) as any
-      );
-
-      const { result } = renderHook(() => useWallet());
-
-      let returned: unknown;
-      await act(async () => { returned = await result.current.connectWallet(); });
-
-      expect(returned).toEqual(existingSession);
-      expect(mockConnectFreighter).not.toHaveBeenCalled();
-    });
-
-    it('goes through full connection flow when no session exists', async () => {
-      const address = 'GNEWADDRESS';
-      const message = 'auth-msg';
-      const signedMessage = 'signed-msg';
-
-      mockConnectFreighter.mockResolvedValue(address);
-      mockCreateAuthMessage.mockReturnValue({ message });
-      mockSignFreighterMessage.mockResolvedValue({
-        signedMessage,
-        signerAddress: address,
+      const result = await service.getAllTweet(7);
+      expect(result).toEqual(tweets);
+      expect(userService.findOneById).toHaveBeenCalledWith(7);
+      expect(tweetRepository.find).toHaveBeenCalledWith({
+        where: { user: { id: 7 } },
       });
+    });
 
-      const storeMock = makeWalletStoreMock({ session: null });
-      mockUseWalletStore.mockReturnValue(storeMock as any);
+    it('should throw NotFoundException if user is not found', async () => {
+      userService.findOneById.mockResolvedValue(null);
 
-      // Wrap executeWithErrorHandling to actually call the fn
-      const { useWalletErrorHandler } = require('@/hooks/useErrorHandler');
-      useWalletErrorHandler.mockReturnValue({
-        executeWithErrorHandling: jest.fn((fn: () => unknown) => fn()),
-        showSuccessNotification: jest.fn(),
-        showErrorNotification: jest.fn(),
-        handleError: jest.fn(),
-        hasError: false,
-        canRetry: false,
-      });
+      await expect(service.getAllTweet(99)).rejects.toThrow(NotFoundException);
+    });
+  });
 
-      const { result } = renderHook(() => useWallet());
+  describe('createTweet', () => {
+    it('should create and save a new tweet', async () => {
+      const dto = { text: 'New tweet', userId: 7 };
+      userService.findOneById.mockResolvedValue({ id: 7 });
 
-      await act(async () => { await result.current.connectWallet(); });
+      const result = await service.createTweet(dto);
+      expect(result).toBeDefined();
+      expect(tweetRepository.create).toHaveBeenCalled();
+      expect(tweetRepository.save).toHaveBeenCalled();
+    });
+  });
 
-      expect(storeMock.startConnection).toHaveBeenCalled();
-      expect(mockConnectFreighter).toHaveBeenCalled();
-      expect(mockCreateAuthMessage).toHaveBeenCalledWith(address);
-      expect(mockSignFreighterMessage).toHaveBeenCalledWith(address, message);
-      expect(storeMock.completeConnection).toHaveBeenCalledWith(
-        expect.objectContaining({
-          address,
-          signedMessage,
-          signerAddress: address,
-        })
+  describe('updateTweet', () => {
+    it('should update and save the tweet if found', async () => {
+      const existing = { id: 1, text: 'Old', image: 'old.png' };
+      tweetRepository.findOneBy.mockResolvedValue(existing);
+
+      const result = await service.updateTweet({ id: 1, text: 'New' });
+      expect(result).toBeDefined();
+      expect(tweetRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'New', image: 'old.png' }),
       );
     });
-  });
 
-  // ──────────────────────────────────────────────────────────
-  // disconnect
-  // ──────────────────────────────────────────────────────────
-  describe('disconnect()', () => {
-    it('calls signOut on disconnect', () => {
-      const storeMock = makeWalletStoreMock();
-      mockUseWalletStore.mockReturnValue(storeMock as any);
+    it('should throw NotFoundException if tweet to update is not found', async () => {
+      tweetRepository.findOneBy.mockResolvedValue(null);
 
-      const { result } = renderHook(() => useWallet());
-
-      act(() => { result.current.disconnect(); });
-
-      expect(storeMock.signOut).toHaveBeenCalled();
+      await expect(
+        service.updateTweet({ id: 99, text: 'New' }),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 
-  // ──────────────────────────────────────────────────────────
-  // Session Expiry
-  // ──────────────────────────────────────────────────────────
-  describe('Session Expiry', () => {
-    it('auto signs out when session is already expired on mount', () => {
-      const expiredSession = {
-        address: 'GABC',
-        expiresAt: Date.now() - 1000, // already expired
-      };
-      const storeMock = makeWalletStoreMock({ session: expiredSession });
-      mockUseWalletStore.mockReturnValue(storeMock as any);
+  describe('DeleteTweet', () => {
+    it('should delete and return deletion info', async () => {
+      tweetRepository.delete.mockResolvedValue({ affected: 1 });
 
-      renderHook(() => useWallet());
-
-      expect(storeMock.signOut).toHaveBeenCalled();
-    });
-
-    it('auto signs out when session expires in the future', async () => {
-      const expiresIn = 5000; // 5 seconds
-      const session = {
-        address: 'GABC',
-        expiresAt: Date.now() + expiresIn,
-      };
-      const storeMock = makeWalletStoreMock({ session });
-      mockUseWalletStore.mockReturnValue(storeMock as any);
-
-      renderHook(() => useWallet());
-
-      expect(storeMock.signOut).not.toHaveBeenCalled();
-
-      act(() => { jest.advanceTimersByTime(expiresIn + 100); });
-
-      expect(storeMock.signOut).toHaveBeenCalled();
-    });
-
-    it('clears the expiry timer on unmount', () => {
-      const clearTimeoutSpy = jest.spyOn(global, 'clearTimeout');
-      const session = {
-        address: 'GABC',
-        expiresAt: Date.now() + 60000,
-      };
-      mockUseWalletStore.mockReturnValue(makeWalletStoreMock({ session }) as any);
-
-      const { unmount } = renderHook(() => useWallet());
-
-      unmount();
-
-      expect(clearTimeoutSpy).toHaveBeenCalled();
-    });
-
-    it('does nothing when session has no expiresAt', () => {
-      const session = { address: 'GABC' }; // no expiresAt
-      const storeMock = makeWalletStoreMock({ session });
-      mockUseWalletStore.mockReturnValue(storeMock as any);
-
-      renderHook(() => useWallet());
-
-      act(() => { jest.advanceTimersByTime(100000); });
-
-      expect(storeMock.signOut).not.toHaveBeenCalled();
+      const result = await service.DeleteTweet(1);
+      expect(result).toEqual({ deleted: true, id: 1 });
+      expect(tweetRepository.delete).toHaveBeenCalledWith({ id: 1 });
     });
   });
 });

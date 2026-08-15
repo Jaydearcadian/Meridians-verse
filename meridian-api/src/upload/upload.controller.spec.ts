@@ -4,11 +4,11 @@ import { UploadController } from './upload.controller';
 import { UploadService } from './upload.service';
 
 // Valid PNG magic bytes
-const PNG_MAGIC = Buffer.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-]);
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-function makeFile(overrides?: Partial<Express.Multer.File>): Express.Multer.File {
+function makeFile(
+  overrides?: Partial<Express.Multer.File>,
+): Express.Multer.File {
   return {
     originalname: 'test.png',
     mimetype: 'image/png',
@@ -47,12 +47,17 @@ describe('UploadController', () => {
     const result = await controller.uploadFile(file);
 
     expect(service.uploadFile).toHaveBeenCalledWith(file);
-    expect(result).toEqual({ url: '/uploads/test.png', originalName: 'test.png' });
+    expect(result).toEqual({
+      url: '/uploads/test.png',
+      originalName: 'test.png',
+    });
   });
 
   it('propagates BadRequestException from the service', async () => {
     service.uploadFile.mockRejectedValueOnce(
-      new BadRequestException('File type "application/javascript" is not allowed'),
+      new BadRequestException(
+        'File type "application/javascript" is not allowed',
+      ),
     );
 
     await expect(controller.uploadFile(makeFile())).rejects.toThrow(

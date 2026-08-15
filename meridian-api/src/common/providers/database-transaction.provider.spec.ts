@@ -42,9 +42,13 @@ describe('DatabaseTransactionProvider', () => {
   });
 
   it('rolls back and rethrows when the callback throws', async () => {
-    const fn = jest.fn(async () => { throw new Error('write failed'); });
+    const fn = jest.fn(async () => {
+      throw new Error('write failed');
+    });
 
-    await expect(provider.executeInTransaction(fn)).rejects.toThrow('write failed');
+    await expect(provider.executeInTransaction(fn)).rejects.toThrow(
+      'write failed',
+    );
 
     expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
     expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
@@ -52,8 +56,12 @@ describe('DatabaseTransactionProvider', () => {
   });
 
   it('always releases the runner even when rollback itself throws', async () => {
-    const fn = jest.fn(async () => { throw new Error('original'); });
-    queryRunner.rollbackTransaction.mockRejectedValueOnce(new Error('rollback failed'));
+    const fn = jest.fn(async () => {
+      throw new Error('original');
+    });
+    queryRunner.rollbackTransaction.mockRejectedValueOnce(
+      new Error('rollback failed'),
+    );
 
     await expect(provider.executeInTransaction(fn)).rejects.toThrow();
     expect(queryRunner.release).toHaveBeenCalled();

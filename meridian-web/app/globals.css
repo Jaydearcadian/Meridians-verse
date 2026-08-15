@@ -165,4 +165,31 @@
   .hover-lift {
     @apply transition-all duration-200 hover:shadow-xl hover:-translate-y-1;
   }
+
+  /**
+   * hero-fade-up — CSS-only entrance animation used by the Hero RSC.
+   * Replaces framer-motion so the hero ships zero JS and improves LCP.
+   * Each element adds a custom [animation-delay:Xms] utility class.
+   */
+  @keyframes hero-fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .hero-fade-up {
+    animation: hero-fade-up 0.6s ease-out both;
+  }
+
+  /* Respect the user's reduced-motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    .hero-fade-up {
+      animation: none;
+    }
+  }
 }

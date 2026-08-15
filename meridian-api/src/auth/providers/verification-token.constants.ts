@@ -8,7 +8,8 @@
 export const VERIFICATION_TTL_MS: number =
   (() => {
     const hours = Number(process.env.VERIFICATION_TOKEN_TTL_HOURS);
-    return Number.isFinite(hours) && hours > 0
-      ? hours
-      : 24;
-  })() * 60 * 60 * 1000;
+    return Number.isFinite(hours) && hours > 0 ? hours : 24;
+  })() *
+  60 *
+  60 *
+  1000;

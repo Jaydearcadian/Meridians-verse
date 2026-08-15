@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_INTERCEPTOR, APP_GUARD } from '@nestjs/core';
 import { CustomThrottlerGuard } from './common/guards/custom-throttler.guard';
 import { DataSource } from 'typeorm';
@@ -28,6 +28,7 @@ import { UploadModule } from './upload/upload.module';
 import { HealthModule } from './health/health.module';
 import { PrometheusModule } from '@willsoto/nestjs-prometheus';
 import { AuditModule } from './audit/audit.module';
+import { EventsModule } from './events/events.module';
 
 @Module({
   imports: [
@@ -80,6 +81,8 @@ import { AuditModule } from './audit/audit.module';
             ssl: {
               rejectUnauthorized: false,
             },
+            retryAttempts: process.env.NODE_ENV === 'test' ? 1 : 10,
+            retryDelay: process.env.NODE_ENV === 'test' ? 100 : 3000,
           };
         }
 
@@ -93,6 +96,8 @@ import { AuditModule } from './audit/audit.module';
           database: config.get<string>('POSTGRES_DB'),
           synchronize: config.get<string>('POSTGRES_SYNC') === 'true',
           autoLoadEntities: config.get<string>('POSTGRES_LOAD') === 'true',
+          retryAttempts: process.env.NODE_ENV === 'test' ? 1 : 10,
+          retryDelay: process.env.NODE_ENV === 'test' ? 100 : 3000,
         };
       },
     }),
@@ -112,6 +117,7 @@ import { AuditModule } from './audit/audit.module';
     HealthModule,
     PrometheusModule.register(),
     AuditModule,
+    EventsModule,
   ],
 
   controllers: [AppController],
