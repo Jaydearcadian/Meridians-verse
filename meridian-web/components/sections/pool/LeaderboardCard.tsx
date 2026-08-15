@@ -46,8 +46,8 @@ export function LeaderboardCard() {
             variants={itemVariantsLeft}
             className={`flex items-center justify-between p-4 rounded-lg transition-colors ${
               entry.rank === 1
-                ? 'bg-primary/10 border border-primary/20'
-                : 'border border-border hover:border-primary/20'
+                ? 'bg-primary/10 border border-primary/20 dark:bg-primary/20 dark:border-primary/30'
+                : 'border border-border hover:border-primary/20 dark:hover:border-primary/30'
             }`}
           >
             <div className="flex items-center gap-4">

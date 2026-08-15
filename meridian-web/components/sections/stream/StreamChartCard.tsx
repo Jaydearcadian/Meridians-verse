@@ -37,16 +37,27 @@ export function StreamChartCard() {
 
       <ResponsiveContainer width="100%" height={300}>
         <LineChart data={streamData}>
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-          <XAxis dataKey="time" stroke="var(--color-muted-foreground)" />
-          <YAxis stroke="var(--color-muted-foreground)" />
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" opacity={0.5} />
+          <XAxis 
+            dataKey="time" 
+            stroke="var(--color-muted-foreground)"
+            tick={{ fill: 'var(--color-muted-foreground)' }}
+            tickLine={{ stroke: 'var(--color-border)' }}
+          />
+          <YAxis 
+            stroke="var(--color-muted-foreground)"
+            tick={{ fill: 'var(--color-muted-foreground)' }}
+            tickLine={{ stroke: 'var(--color-border)' }}
+          />
           <Tooltip
             contentStyle={{
               backgroundColor: 'var(--color-card)',
-              border: '1px solid var(--color-border)',
+              borderColor: 'var(--color-border)',
               borderRadius: '8px',
+              color: 'var(--color-foreground)',
             }}
-            labelStyle={{ color: 'var(--color-foreground)' }}
+            itemStyle={{ color: 'var(--color-foreground)' }}
+            labelStyle={{ color: 'var(--color-muted-foreground)' }}
           />
           <Line
             type="monotone"

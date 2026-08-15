@@ -17,7 +17,7 @@ export function TimerSelector() {
         {timerOptions.map((minutes) => (
           <button
             key={minutes}
-            className="py-3 rounded-lg border border-primary bg-primary/10 hover:bg-primary/20 text-primary font-semibold transition-colors"
+            className="py-3 rounded-lg border border-primary bg-primary/10 hover:bg-primary/20 dark:bg-primary/20 dark:hover:bg-primary/30 text-primary font-semibold transition-colors"
           >
             {minutes} min
           </button>
