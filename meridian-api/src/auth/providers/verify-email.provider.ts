@@ -5,6 +5,7 @@ import { User } from 'src/users/user.entity';
 import { VerificationTokenProvider } from './verification-token.provider';
 import { MailProvider } from 'src/mail/providers/mail.provider';
 import { VERIFICATION_TTL_MS } from './verification-token.constants';
+import { CryptoProvider, constantTimeEqual } from 'src/crypto/providers/crypto.provider';
 
 /**
  * Email-verification flows (issue #435).
@@ -29,6 +30,10 @@ export class VerifyEmailProvider {
     private readonly tokenProvider: VerificationTokenProvider,
 
     private readonly mailService: MailProvider,
+
+    // Envelope encryption (issue #631): encrypts the raw token on the user
+    // row so it can be rotated/audited without re-hashing.
+    private readonly cryptoProvider: CryptoProvider,
   ) {}
 
   /**
@@ -41,10 +46,20 @@ export class VerifyEmailProvider {
 
     const expires = new Date(Date.now() + VERIFICATION_TTL_MS);
 
+    // Envelope-encrypt the raw token under the user's DEK (issue #631). The
+    // bcrypt hash stays the primary verification value; the ciphertext is a
+    // reversible copy for rotation/audit. Skipped in transparent-fallback
+    // mode (no KEK) so plaintext is never persisted.
+    const encrypted = this.cryptoProvider.isEnabled()
+      ? await this.encryptUserData(user, { verificationToken: raw })
+      : null;
+
     await this.usersRepository.update(user.id, {
       emailVerificationToken: hashed,
       emailVerificationExpires: expires,
       emailVerified: false,
+      dataEncryptionKeyId: encrypted?.dataEncryptionKeyId ?? user.dataEncryptionKeyId ?? null,
+      encryptedData: encrypted?.encryptedData ?? null,
     });
 
     try {
@@ -68,20 +83,45 @@ export class VerifyEmailProvider {
     }
 
     const now = new Date();
+    // Match either a legacy bcrypt-hash row or an envelope-encrypted row.
     const candidates = await this.usersRepository.find({
-      where: {
-        emailVerificationToken: Not(IsNull()),
-        emailVerificationExpires: MoreThan(now),
-      },
+      where: [
+        {
+          emailVerificationToken: Not(IsNull()),
+          emailVerificationExpires: MoreThan(now),
+        },
+        {
+          encryptedData: Not(IsNull()),
+          emailVerificationExpires: MoreThan(now),
+        },
+      ],
     });
 
     for (const user of candidates) {
-      const matches = await this.tokenProvider.compare(
-        rawToken,
-        // Property is non-null because of the Not(IsNull()) filter above;
-        // narrow for TypeScript.
-        user.emailVerificationToken as string,
-      );
+      let matches = false;
+
+      // Legacy path: bcrypt-compare against the stored hash.
+      if (user.emailVerificationToken) {
+        matches = await this.tokenProvider.compare(
+          rawToken,
+          user.emailVerificationToken,
+        );
+      }
+
+      // New path (issue #631): decrypt the envelope and constant-time compare.
+      if (!matches && user.encryptedData) {
+        try {
+          const decrypted = await this.decryptUserData(user.encryptedData);
+          matches = constantTimeEqual(decrypted.verificationToken ?? '', rawToken);
+        } catch (error) {
+          this.logger.warn(
+            `Failed to decrypt verification token for user ${user.id}: ${
+              error instanceof Error ? error.message : error
+            }`,
+          );
+        }
+      }
+
       if (!matches) {
         continue;
       }
@@ -90,11 +130,42 @@ export class VerifyEmailProvider {
         emailVerified: true,
         emailVerificationToken: null,
         emailVerificationExpires: null,
+        encryptedData: null,
       });
 
       return { ...user, emailVerified: true };
     }
 
     throw new UnauthorizedException('Invalid or expired verification token');
+  }
+
+  /**
+   * Encrypt a small set of user-sensitive fields (issue #631). The value is
+   * stored as a JSON container inside the envelope so future fields (e.g.
+   * PII) can share the same column without a schema change.
+   */
+  private async encryptUserData(
+    user: User,
+    fields: Record<string, string>,
+  ): Promise<{ encryptedData: string; dataEncryptionKeyId: string | null }> {
+    const { ciphertext, dekId } = await this.cryptoProvider.encrypt(
+      JSON.stringify(fields),
+      { dekId: user.dataEncryptionKeyId ?? undefined },
+    );
+    return {
+      encryptedData: ciphertext,
+      dataEncryptionKeyId: dekId ?? user.dataEncryptionKeyId ?? null,
+    };
+  }
+
+  private async decryptUserData(
+    encryptedData: string,
+  ): Promise<Record<string, string>> {
+    const json = await this.cryptoProvider.decrypt(encryptedData);
+    try {
+      return JSON.parse(json) as Record<string, string>;
+    } catch {
+      return {};
+    }
   }
 }
