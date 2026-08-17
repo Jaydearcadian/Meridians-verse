@@ -10,6 +10,9 @@ import { DataSource } from 'typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { envValidationSchema } from './config/env.validation';
+import { join } from 'path';
+
+import { CryptoModule } from './crypto/crypto.module';
 
 import { UsersModule } from './users/users.module';
 import { PostModule } from './post/post.module';
@@ -78,6 +81,8 @@ import { EventsModule } from './events/events.module';
             url: databaseUrl,
             autoLoadEntities: true,
             synchronize: false,
+            migrations: [join(__dirname, 'database/migrations/*{.ts,.js}')],
+            migrationsRun: true,
             ssl: {
               rejectUnauthorized: false,
             },
@@ -95,6 +100,9 @@ import { EventsModule } from './events/events.module';
           password: config.get<string>('POSTGRES_PASSWORD'),
           database: config.get<string>('POSTGRES_DB'),
           synchronize: config.get<string>('POSTGRES_SYNC') === 'true',
+          // Run migrations instead of synchronize when sync is off (prod-like).
+          migrations: [join(__dirname, 'database/migrations/*{.ts,.js}')],
+          migrationsRun: config.get<string>('POSTGRES_SYNC') !== 'true',
           autoLoadEntities: config.get<string>('POSTGRES_LOAD') === 'true',
           retryAttempts: process.env.NODE_ENV === 'test' ? 1 : 10,
           retryDelay: process.env.NODE_ENV === 'test' ? 100 : 3000,
@@ -105,6 +113,7 @@ import { EventsModule } from './events/events.module';
     ConfigModule.forFeature(jwtConfig),
     JwtModule.registerAsync(jwtConfig.asProvider()),
 
+    CryptoModule,
     UsersModule,
     PostModule,
     TagModule,
