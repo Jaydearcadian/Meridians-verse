@@ -147,7 +147,11 @@ use ark_bn254::Bn254;
 #[cfg(feature = "zk")]
 use ark_groth16::{Proof, VerifyingKey};
 #[cfg(feature = "zk")]
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_serialize::CanonicalDeserialize;
+// CanonicalSerialize is only consumed by the test-only serialize helpers.
+#[cfg(feature = "zk")]
+#[cfg(test)]
+use ark_serialize::CanonicalSerialize;
 
 /// Deserialize a compressed Groth16 verification key for Bn254.
 #[cfg(feature = "zk")]
@@ -258,6 +262,7 @@ mod tests {
         use ark_bn254::Fr;
         use ark_ff::{PrimeField, UniformRand};
         use ark_serialize::CanonicalSerialize;
+        use ark_std::test_rng;
 
         // Deterministic boundary cases plus random values.
         let mut cases: Vec<[u8; 32]> = vec![[0u8; 32], [0xffu8; 32]];
