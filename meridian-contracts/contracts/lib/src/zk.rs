@@ -128,9 +128,11 @@ mod tests {
         assert!(!validate_public_inputs(&[]));
         assert!(validate_public_inputs(&[[0u8; 32]]));
         assert!(!validate_public_inputs(&[[0xffu8; 32]]));
-        let many = vec![[0u8; 32]; MAX_PUBLIC_INPUTS];
+        // Array literals are used instead of `vec!` because this is a `#![no_std]`
+        // crate and the `vec!` macro is not in the prelude.
+        let many = [[0u8; 32]; MAX_PUBLIC_INPUTS];
         assert!(validate_public_inputs(&many));
-        let too_many = vec![[0u8; 32]; MAX_PUBLIC_INPUTS + 1];
+        let too_many = [[0u8; 32]; MAX_PUBLIC_INPUTS + 1];
         assert!(!validate_public_inputs(&too_many));
     }
 }

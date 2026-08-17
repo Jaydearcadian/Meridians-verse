@@ -21,6 +21,7 @@ mod propchain_oracle {
         string::{String, ToString},
         vec::Vec,
     };
+    use scale::Encode;
 
     /// Property Valuation Oracle storage
     #[ink(storage)]
@@ -80,6 +81,28 @@ mod propchain_oracle {
 
         /// Risk pool address — receives slashed funds
         pub risk_pool: Option<AccountId>,
+
+        /// ZK compliance contract used to verify zero-knowledge attestations
+        zk_compliance_contract: Option<AccountId>,
+
+        /// ZK-attested valuations: property_id -> attestation record
+        zk_attestations: Mapping<u64, ZkAttestedValuation>,
+    }
+
+    /// A ZK-attested property valuation: the value is proven on-chain without
+    /// revealing the source data used to derive it.
+    #[derive(Debug, Clone, PartialEq, scale::Encode, scale::Decode)]
+    #[cfg_attr(
+        feature = "std",
+        derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+    )]
+    pub struct ZkAttestedValuation {
+        pub property_id: u64,
+        pub valuation: u128,
+        pub proof_type: ZkProofType,
+        /// Binding public input (BLAKE2b-256 of the SCALE-encoded statement)
+        pub statement_hash: [u8; 32],
+        pub attested_at: u64,
     }
 
     /// Emitted when an oracle source is slashed and funds transferred to the risk pool
@@ -191,6 +214,21 @@ mod propchain_oracle {
     }
 
     #[ink(event)]
+    pub struct ZkComplianceContractSet {
+        #[ink(topic)]
+        zk_contract: AccountId,
+    }
+
+    #[ink(event)]
+    pub struct ZkValuationAttested {
+        #[ink(topic)]
+        property_id: u64,
+        valuation: u128,
+        statement_hash: [u8; 32],
+        timestamp: u64,
+    }
+
+    #[ink(event)]
     pub struct ValuationFromSourcesUpdated {
         #[ink(topic)]
         property_id: u64,
@@ -222,6 +260,8 @@ mod propchain_oracle {
                 confirmation_depth: 6, // 6 blocks default
                 ai_valuation_contract: None,
                 risk_pool: None,
+                zk_compliance_contract: None,
+                zk_attestations: Mapping::default(),
             }
         }
 
@@ -636,6 +676,102 @@ mod propchain_oracle {
         #[ink(message)]
         pub fn get_ai_valuation_contract(&self) -> Option<AccountId> {
             self.ai_valuation_contract
+        }
+
+        /// Set the ZK compliance contract used to verify attestations (admin only)
+        #[ink(message)]
+        pub fn set_zk_compliance_contract(
+            &mut self,
+            zk_contract: AccountId,
+        ) -> Result<(), OracleError> {
+            self.ensure_admin()?;
+            self.zk_compliance_contract = Some(zk_contract);
+            self.env().emit_event(ZkComplianceContractSet { zk_contract });
+            Ok(())
+        }
+
+        /// Get the configured ZK compliance contract address
+        #[ink(message)]
+        pub fn get_zk_compliance_contract(&self) -> Option<AccountId> {
+            self.zk_compliance_contract
+        }
+
+        /// Submit a ZK-attested property valuation.
+        ///
+        /// The attestation is a [`ZkProofData`] payload produced by the
+        /// compliance contract flow (or by an off-chain prover) whose single
+        /// public input binds the statement `(property_id, valuation)` via
+        /// BLAKE2b-256. The proof is verified by a cross-contract call to the
+        /// configured ZK compliance contract; only verified attestations are
+        /// accepted, so no admin trust or source data is required.
+        #[ink(message)]
+        pub fn submit_zk_valuation(
+            &mut self,
+            property_id: u64,
+            valuation: u128,
+            confidence_score: u32,
+            attestation: ZkProofData,
+        ) -> Result<(), OracleError> {
+            // A ZK attestation replaces admin trust: anyone may submit, but the
+            // proof must verify against the registered key on-chain.
+            if valuation == 0 {
+                return Err(OracleError::InvalidValuation);
+            }
+
+            // Bind the statement into the expected public input.
+            let statement = (property_id, valuation).encode();
+            let expected_input = self.bind_public_input(&statement);
+            if attestation.public_inputs.len() != 1
+                || attestation.public_inputs[0] != expected_input
+            {
+                return Err(OracleError::InvalidZkProof);
+            }
+
+            let verified = self.call_zk_verifier(
+                attestation.proof_type,
+                attestation.public_inputs.clone(),
+                attestation.proof_data.clone(),
+            )?;
+            if !verified {
+                return Err(OracleError::ZkVerificationFailed);
+            }
+
+            // Persist the attestation record.
+            let record = ZkAttestedValuation {
+                property_id,
+                valuation,
+                proof_type: attestation.proof_type,
+                statement_hash: expected_input,
+                attested_at: self.env().block_timestamp(),
+            };
+            self.zk_attestations.insert(&property_id, &record);
+
+            // Push through the standard valuation pipeline.
+            let property_valuation = PropertyValuation {
+                property_id,
+                valuation,
+                confidence_score,
+                sources_used: 1,
+                last_updated: self.env().block_timestamp(),
+                valuation_method: ValuationMethod::Hybrid,
+                confirmed_at_block: None,
+            };
+            self.update_property_valuation(property_id, property_valuation)?;
+
+            self.env().emit_event(ZkValuationAttested {
+                property_id,
+                valuation,
+                statement_hash: expected_input,
+                timestamp: self.env().block_timestamp(),
+            });
+
+            Ok(())
+        }
+
+        /// Get the ZK attestation record stored for a property.
+        #[ink(message)]
+        pub fn get_zk_attestation(&self, property_id: u64) -> Option<ZkAttestedValuation> {
+            self.zk_attestations.get(&property_id)
         }
 
         /// Add oracle source (admin only)
