@@ -9,6 +9,13 @@ ink = { version = "5.0.0", default-features = false }
 scale = { package = "parity-scale-codec", version = "3", default-features = false, features = ["derive"] }
 scale-info = { version = "2.6", default-features = false, features = ["derive"], optional = true }
 
+# Zero-knowledge proof of model execution (optional; enabled via the `zk` feature)
+ark-bn254 = { version = "0.4", default-features = false, optional = true }
+ark-groth16 = { version = "0.4", default-features = false, optional = true }
+ark-ff = { version = "0.4", default-features = false, optional = true }
+ark-snark = { version = "0.4", default-features = false, optional = true }
+ark-serialize = { version = "0.4", default-features = false, optional = true }
+
 # PropChain dependencies
 propchain-traits = { path = "../traits", default-features = false }
 propchain-contracts = { path = "../lib", default-features = false }
@@ -25,5 +32,18 @@ std = [
     "scale-info/std",
     "propchain-traits/std",
     "propchain-contracts/std",
+    "ark-bn254/std",
+    "ark-groth16/std",
+    "ark-ff/std",
+    "ark-snark/std",
+    "ark-serialize/std",
 ]
 ink-as-dependency = []
+# Real Groth16 verification of model execution
+zk = [
+    "ark-bn254",
+    "ark-groth16",
+    "ark-ff",
+    "ark-snark",
+    "ark-serialize",
+]

@@ -6,11 +6,13 @@
 pub mod property_based_tests;
 pub mod fuzz_tests;
 pub mod security_analysis;
+pub mod zk_tests;
 
 // Re-export commonly used items
 pub use property_based_tests::*;
 pub use fuzz_tests::*;
 pub use security_analysis::*;
+pub use zk_tests::*;
 
 #[cfg(test)]
 mod tests {

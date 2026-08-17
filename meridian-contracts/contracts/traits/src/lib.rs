@@ -785,6 +785,106 @@ pub trait PropertyTokenOwnership {
 // Data Migration Framework (Issue #308)
 // =============================================================================
 
+// =============================================================================
+// Zero-Knowledge Compliance & Oracle Integrity (Issue #629)
+// =============================================================================
+
+/// Status lifecycle of a submitted zero-knowledge proof.
+#[derive(Debug, PartialEq, Eq, Clone, Copy, scale::Encode, scale::Decode)]
+#[cfg_attr(
+    feature = "std",
+    derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+)]
+pub enum ZkProofStatus {
+    NotSubmitted,
+    Pending,
+    Verified,
+    Rejected,
+    Expired,
+}
+
+/// Type of zero-knowledge proof.
+///
+/// The discriminant is used as the storage key for the per-type Groth16
+/// verification key records, so the variant order is part of the storage
+/// layout and must not be reordered.
+#[derive(Debug, PartialEq, Eq, Clone, Copy, scale::Encode, scale::Decode)]
+#[cfg_attr(
+    feature = "std",
+    derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+)]
+pub enum ZkProofType {
+    IdentityVerification,
+    ComplianceCheck,
+    PropertyOwnership,
+    FinancialStanding,
+    AgeVerification,
+    AccreditedInvestor,
+    AddressOwnership,
+    IncomeVerification,
+    Creditworthiness,
+}
+
+/// Zero-knowledge proof payload shared between the compliance contract, the
+/// oracle, the AI-valuation engine, and the insurance contract.
+///
+/// The field order is part of the on-chain storage layout and must not be
+/// reordered once deployed.
+#[derive(Debug, Clone, scale::Encode, scale::Decode)]
+#[cfg_attr(
+    feature = "std",
+    derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+)]
+pub struct ZkProofData {
+    pub proof_type: ZkProofType,
+    pub status: ZkProofStatus,
+    pub public_inputs: Vec<[u8; 32]>, // Public inputs for the ZK proof
+    pub proof_data: Vec<u8>,          // Serialized (compressed) Groth16 proof
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub verifier: AccountId,
+    pub metadata: Vec<u8>,            // Additional metadata
+}
+
+/// Errors returned when verifying a zero-knowledge proof.
+///
+/// Used both on-chain (by the compliance contract's `verify_zk_proof_data`
+/// message) and across contract boundaries (by the oracle), so it must be
+/// SCALE-encodable.
+#[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+pub enum ZkVerifyError {
+    /// The proof payload could not be deserialized.
+    InvalidProof,
+    /// The stored verification key bytes could not be deserialized.
+    InvalidVerificationKey,
+    /// No active verification key is registered for this proof type.
+    VerificationKeyNotFound,
+    /// The Groth16 pairing verification failed.
+    VerificationFailed,
+    /// The public inputs are malformed (empty, non-canonical, or too many).
+    InvalidPublicInputs,
+    /// The verifier was built without the `zk` feature; no real verification is possible.
+    ZkUnavailable,
+}
+
+/// A versioned Groth16 verification key stored on-chain.
+///
+/// `serialized_vk` holds the compressed `ark_groth16::VerifyingKey<Bn254>`
+/// bytes; `vk_hash` is an opaque 32-byte fingerprint supplied by the admin
+/// (e.g. SHA-256 of the serialized key) used for off-chain auditability.
+#[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+#[cfg_attr(
+    feature = "std",
+    derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+)]
+pub struct VerificationKeyRecord {
+    pub version: u32,
+    pub serialized_vk: Vec<u8>,
+    pub vk_hash: [u8; 32],
+    pub is_active: bool,
+}
+
 /// Errors returned by [`DataMigration`] implementations.
 #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
 #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]

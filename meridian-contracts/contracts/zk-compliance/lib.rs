@@ -1,73 +1,44 @@
 #![cfg_attr(not(feature = "std"), no_std, no_main)]
 
 //! ZK compliance contract for proof-based regulatory checks.
+//!
+//! Proofs are verified with real Groth16 (arkworks over Bn254) when the crate
+//! is compiled with the `zk` feature. Without the `zk` feature the contract
+//! **rejects every proof** instead of auto-approving, so an unverifiable proof
+//! can never be marked as `Verified`.
+//!
+//! Verification keys are stored per proof type in `verification_keys`
+//! (`Mapping<u8, VerificationKeyRecord>`, keyed by the [`ZkProofType`]
+//! discriminant) and are managed by the contract owner via
+//! `set_verification_key` / `rotate_verification_key` /
+//! `deactivate_verification_key`.
+//!
+//! Wire format (see `src/verification_keys.rs` and `scripts/generate_zk_proofs`):
+//! proofs and keys use compressed arkworks serialization; each proof carries a
+//! single public input derived as BLAKE2b-256 of the SCALE-encoded statement.
 
+#[path = "src/verification_keys.rs"]
+mod verification_keys;
 
 #[ink::contract]
 mod zk_compliance {
+    use super::verification_keys;
     use ink::prelude::vec::Vec;
     use ink::storage::Mapping;
-    use ink::env::call::{Call, CallParams, ExecutionInput};
-    use ink::env::DefaultEnvironment;
+    use propchain_traits::{
+        VerificationKeyRecord, ZkProofData, ZkProofStatus, ZkProofType, ZkVerifyError,
+    };
+    use scale::Encode;
 
-    // Conditional imports for ZK libraries when zk feature is enabled
-    #[cfg(feature = "zk")]
-    use ark_ff::PrimeField;
+    // Conditional imports for ZK libraries when the zk feature is enabled
     #[cfg(feature = "zk")]
     use ark_bn254::{Bn254, Fr};
     #[cfg(feature = "zk")]
-    use ark_groth16::{Groth16, Proof, VerifyingKey};
+    use ark_ff::PrimeField;
+    #[cfg(feature = "zk")]
+    use ark_groth16::{Groth16, PreparedVerifyingKey};
     #[cfg(feature = "zk")]
     use ark_snark::SNARK;
-
-    /// ZK Proof verification status
-    #[derive(Debug, PartialEq, Eq, Clone, Copy, scale::Encode, scale::Decode)]
-    #[cfg_attr(
-        feature = "std",
-        derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
-    )]
-    pub enum ZkProofStatus {
-        NotSubmitted,
-        Pending,
-        Verified,
-        Rejected,
-        Expired,
-    }
-
-    /// Type of ZK proof
-    #[derive(Debug, PartialEq, Eq, Clone, Copy, scale::Encode, scale::Decode)]
-    #[cfg_attr(
-        feature = "std",
-        derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
-    )]
-    pub enum ZkProofType {
-        IdentityVerification,
-        ComplianceCheck,
-        PropertyOwnership,
-        FinancialStanding,
-        AgeVerification,
-        AccreditedInvestor,
-        AddressOwnership,
-        IncomeVerification,
-        Creditworthiness,
-    }
-
-    /// ZK Proof data structure
-    #[derive(Debug, Clone, scale::Encode, scale::Decode)]
-    #[cfg_attr(
-        feature = "std",
-        derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
-    )]
-    pub struct ZkProofData {
-        pub proof_type: ZkProofType,
-        pub status: ZkProofStatus,
-        pub public_inputs: Vec<[u8; 32]>, // Public inputs for the ZK proof
-        pub proof_data: Vec<u8>,          // Serialized ZK proof
-        pub created_at: Timestamp,
-        pub expires_at: Timestamp,
-        pub verifier: AccountId,
-        pub metadata: Vec<u8>,            // Additional metadata
-    }
 
     /// User's privacy preferences
     #[derive(Debug, Clone, scale::Encode, scale::Decode)]
@@ -78,7 +49,7 @@ mod zk_compliance {
     pub struct PrivacyPreferences {
         pub allow_analytics: bool,
         pub share_data_with_third_party: bool,
-        pub consent_timestamp: Timestamp,
+        pub consent_timestamp: u64,
         pub privacy_level: u8, // 1-5 scale, 5 being highest privacy
         pub encrypted_metadata: Vec<u8>,
     }
@@ -92,8 +63,8 @@ mod zk_compliance {
     pub struct ZkComplianceData {
         pub zk_proof_ids: Vec<u64>, // References to ZK proofs
         pub verification_status: ZkProofStatus,
-        pub last_verification: Timestamp,
-        pub next_required_verification: Timestamp,
+        pub last_verification: u64,
+        pub next_required_verification: u64,
         pub compliance_jurisdiction: u8, // 0-255 for jurisdiction encoding
         pub privacy_controls_enabled: bool,
     }
@@ -118,6 +89,8 @@ mod zk_compliance {
         audit_log_count: Mapping<AccountId, u64>,
         /// Global proof verification statistics (privacy-preserving)
         verification_stats: VerificationStats,
+        /// Groth16 verification keys per proof type (keyed by ZkProofType discriminant)
+        verification_keys: Mapping<u8, VerificationKeyRecord>,
     }
 
     /// Audit log entry (without exposing sensitive data)
@@ -130,7 +103,7 @@ mod zk_compliance {
         pub account: AccountId,
         pub proof_type: ZkProofType,
         pub status: ZkProofStatus,
-        pub timestamp: Timestamp,
+        pub timestamp: u64,
         pub action: u8, // 0=submit, 1=verify, 2=reject, 3=expire
     }
 
@@ -144,7 +117,7 @@ mod zk_compliance {
         pub total_verifications: u64,
         pub successful_verifications: u64,
         pub failed_verifications: u64,
-        pub last_updated: Timestamp,
+        pub last_updated: u64,
     }
 
     /// Privacy dashboard data structure
@@ -160,8 +133,8 @@ mod zk_compliance {
         pub expired_proofs: u32,
         pub total_proofs: u32,
         pub privacy_level: u8, // 1-5 scale
-        pub last_compliance_check: Timestamp,
-        pub next_verification_due: Timestamp,
+        pub last_compliance_check: u64,
+        pub next_verification_due: u64,
         pub audit_log_count: u32,
     }
 
@@ -177,8 +150,8 @@ mod zk_compliance {
         pub financial_verified: bool,
         pub accredited_investor: bool,
         pub overall_status: ZkProofStatus,
-        pub last_verification: Timestamp,
-        pub next_verification_due: Timestamp,
+        pub last_verification: u64,
+        pub next_verification_due: u64,
     }
 
     /// Errors
@@ -195,6 +168,10 @@ mod zk_compliance {
         PrivacyControlsViolation,
         StatsNotAvailable,
         InvalidPrivacyLevel,
+        /// No active verification key is registered for this proof type.
+        VerificationKeyNotFound,
+        /// The registered verification key bytes are malformed.
+        InvalidVerificationKey,
     }
 
     pub type Result<T> = core::result::Result<T, Error>;
@@ -206,7 +183,7 @@ mod zk_compliance {
         account: AccountId,
         proof_id: u64,
         proof_type: ZkProofType,
-        timestamp: Timestamp,
+        timestamp: u64,
     }
 
     #[ink(event)]
@@ -214,7 +191,7 @@ mod zk_compliance {
         #[ink(topic)]
         account: AccountId,
         proof_id: u64,
-        timestamp: Timestamp,
+        timestamp: u64,
     }
 
     #[ink(event)]
@@ -222,7 +199,7 @@ mod zk_compliance {
         #[ink(topic)]
         account: AccountId,
         proof_id: u64,
-        timestamp: Timestamp,
+        timestamp: u64,
     }
 
     #[ink(event)]
@@ -230,14 +207,14 @@ mod zk_compliance {
         #[ink(topic)]
         account: AccountId,
         privacy_level: u8,
-        timestamp: Timestamp,
+        timestamp: u64,
     }
 
     #[ink(event)]
     pub struct ComplianceVerified {
         #[ink(topic)]
         account: AccountId,
-        timestamp: Timestamp,
+        timestamp: u64,
     }
 
     #[ink(event)]
@@ -245,7 +222,15 @@ mod zk_compliance {
         #[ink(topic)]
         account: AccountId,
         status: ZkProofStatus,
-        timestamp: Timestamp,
+        timestamp: u64,
+    }
+
+    #[ink(event)]
+    pub struct VerificationKeySet {
+        #[ink(topic)]
+        proof_type: ZkProofType,
+        version: u32,
+        is_active: bool,
     }
 
     impl ZkCompliance {
@@ -253,7 +238,7 @@ mod zk_compliance {
         #[ink(constructor)]
         pub fn new() -> Self {
             let caller = Self::env().caller();
-            
+
             Self {
                 owner: caller,
                 zk_proofs: Mapping::default(),
@@ -269,6 +254,7 @@ mod zk_compliance {
                     failed_verifications: 0,
                     last_updated: Self::env().block_timestamp(),
                 },
+                verification_keys: Mapping::default(),
             }
         }
 
@@ -300,7 +286,7 @@ mod zk_compliance {
             };
 
             self.zk_proofs.insert((caller, proof_id), &proof);
-            
+
             // Log audit event
             self.log_audit_event(caller, proof_type, ZkProofStatus::Pending, 0);
 
@@ -314,7 +300,11 @@ mod zk_compliance {
             Ok(proof_id)
         }
 
-        /// Verify a ZK proof (called by approved verifiers)
+        /// Verify a ZK proof (called by approved verifiers).
+        ///
+        /// Proofs are only marked `Verified` when the Groth16 verification
+        /// succeeds. Unverifiable proofs are rejected — the contract never
+        /// auto-approves a proof.
         #[ink(message)]
         pub fn verify_zk_proof(
             &mut self,
@@ -331,10 +321,15 @@ mod zk_compliance {
                 return Err(Error::AlreadyVerified);
             }
 
-            // In a real implementation, this would perform actual ZK proof verification
-            // Here we'll simulate the verification process
-            let verification_successful = self.perform_zk_verification(&proof)?;
-            
+            // Only run cryptographic verification when the verifier intends to
+            // approve. Without the `zk` feature (or with a missing key) the
+            // proof cannot be verified and is rejected.
+            let verification_successful = if approve {
+                self.perform_zk_verification(&proof)?
+            } else {
+                false
+            };
+
             if approve && verification_successful {
                 proof.status = ZkProofStatus::Verified;
             } else {
@@ -375,19 +370,165 @@ mod zk_compliance {
             Ok(())
         }
 
+        /// Stateless proof verification, callable by any contract or account.
+        ///
+        /// This is the entry point used by the oracle and other consumers for
+        /// cross-contract verification of ZK-attested statements.
+        #[ink(message)]
+        pub fn verify_zk_proof_data(
+            &self,
+            proof_type: ZkProofType,
+            public_inputs: Vec<[u8; 32]>,
+            proof_data: Vec<u8>,
+        ) -> core::result::Result<bool, ZkVerifyError> {
+            #[cfg(feature = "zk")]
+            {
+                if !verification_keys::validate_public_inputs(&public_inputs) {
+                    return Err(ZkVerifyError::InvalidPublicInputs);
+                }
+                if !verification_keys::validate_proof_payload(&proof_data) {
+                    return Err(ZkVerifyError::InvalidProof);
+                }
+
+                let record = self
+                    .verification_keys
+                    .get(&(proof_type as u8))
+                    .ok_or(ZkVerifyError::VerificationKeyNotFound)?;
+                if !record.is_active {
+                    return Err(ZkVerifyError::VerificationKeyNotFound);
+                }
+
+                let vk = verification_keys::deserialize_vk(&record.serialized_vk)
+                    .map_err(|_| ZkVerifyError::InvalidVerificationKey)?;
+                let inputs: Vec<Fr> = public_inputs
+                    .iter()
+                    .map(|bytes| Fr::from_le_bytes_mod_order(bytes.as_slice()))
+                    .collect();
+                let proof = verification_keys::deserialize_proof(&proof_data)
+                    .map_err(|_| ZkVerifyError::InvalidProof)?;
+
+                let pvk = PreparedVerifyingKey::from(vk);
+                Groth16::<Bn254>::verify_with_processed_vk(&pvk, &inputs, &proof)
+                    .map_err(|_| ZkVerifyError::VerificationFailed)
+            }
+            #[cfg(not(feature = "zk"))]
+            {
+                let _ = (proof_type, public_inputs, proof_data);
+                Err(ZkVerifyError::ZkUnavailable)
+            }
+        }
+
+        /// Register (or replace) the verification key for a proof type (owner only).
+        #[ink(message)]
+        pub fn set_verification_key(
+            &mut self,
+            proof_type: ZkProofType,
+            serialized_vk: Vec<u8>,
+            vk_hash: [u8; 32],
+        ) -> Result<()> {
+            self.ensure_owner()?;
+
+            if serialized_vk.is_empty() || serialized_vk.len() > verification_keys::MAX_PROOF_LEN {
+                return Err(Error::InvalidVerificationKey);
+            }
+
+            // Eagerly validate the key bytes when the zk backend is compiled in.
+            #[cfg(feature = "zk")]
+            {
+                verification_keys::deserialize_vk(&serialized_vk)
+                    .map_err(|_| Error::InvalidVerificationKey)?;
+            }
+
+            let existing = self.verification_keys.get(&(proof_type as u8));
+            let version = existing.as_ref().map(|r| r.version + 1).unwrap_or(1);
+
+            self.verification_keys.insert(
+                &(proof_type as u8),
+                &VerificationKeyRecord {
+                    version,
+                    serialized_vk,
+                    vk_hash,
+                    is_active: true,
+                },
+            );
+
+            self.env().emit_event(VerificationKeySet {
+                proof_type,
+                version,
+                is_active: true,
+            });
+
+            Ok(())
+        }
+
+        /// Rotate the verification key for a proof type, returning the new version (owner only).
+        #[ink(message)]
+        pub fn rotate_verification_key(
+            &mut self,
+            proof_type: ZkProofType,
+            serialized_vk: Vec<u8>,
+            vk_hash: [u8; 32],
+        ) -> Result<u32> {
+            // Rotation is `set` with the version always bumped.
+            self.set_verification_key(proof_type, serialized_vk, vk_hash)?;
+            let version = self
+                .verification_keys
+                .get(&(proof_type as u8))
+                .map(|r| r.version)
+                .ok_or(Error::VerificationKeyNotFound)?;
+            Ok(version)
+        }
+
+        /// Deactivate the verification key for a proof type (owner only).
+        ///
+        /// Deactivated keys cause all future verification attempts for that
+        /// proof type to fail with [`Error::VerificationKeyNotFound`].
+        #[ink(message)]
+        pub fn deactivate_verification_key(&mut self, proof_type: ZkProofType) -> Result<()> {
+            self.ensure_owner()?;
+            let mut record = self
+                .verification_keys
+                .get(&(proof_type as u8))
+                .ok_or(Error::VerificationKeyNotFound)?;
+            record.is_active = false;
+            self.verification_keys.insert(&(proof_type as u8), &record);
+
+            self.env().emit_event(VerificationKeySet {
+                proof_type,
+                version: record.version,
+                is_active: false,
+            });
+
+            Ok(())
+        }
+
+        /// Get the verification key record for a proof type.
+        #[ink(message)]
+        pub fn get_verification_key(&self, proof_type: ZkProofType) -> Option<VerificationKeyRecord> {
+            self.verification_keys.get(&(proof_type as u8))
+        }
+
+        /// Get the current verification key version for a proof type.
+        #[ink(message)]
+        pub fn get_verification_key_version(&self, proof_type: ZkProofType) -> Option<u32> {
+            self.verification_keys
+                .get(&(proof_type as u8))
+                .map(|record| record.version)
+        }
+
         /// Check if a ZK proof is valid without revealing sensitive data
         #[ink(message)]
         pub fn is_zk_proof_valid(&self, account: AccountId, proof_type: ZkProofType) -> bool {
             // Find the latest proof of this type for the account
             let current_id = self.proof_counter.get(account).unwrap_or(0);
-            
+
             for proof_id in (1..=current_id).rev() {
                 if let Some(proof) = self.zk_proofs.get((account, proof_id)) {
                     if proof.proof_type == proof_type {
                         let now = self.env().block_timestamp();
-                        
+
                         // Check if proof is verified and not expired
-                        if proof.status == ZkProofStatus::Verified && 
+                        if proof.status == ZkProofStatus::Verified &&
                            proof.expires_at > now {
                             return true;
                         } else {
@@ -397,7 +538,7 @@ mod zk_compliance {
                     }
                 }
             }
-            
+
             false
         }
 
@@ -482,16 +623,16 @@ mod zk_compliance {
             encrypted_metadata: Vec<u8>
         ) -> Result<()> {
             let caller = self.env().caller();
-            
+
             if privacy_level > 5 {
                 return Err(Error::InvalidPrivacyLevel);
             }
-            
+
             // Check if user has given explicit consent to process their data
             if !consent_to_process {
                 return Err(Error::PrivacyControlsViolation);
             }
-            
+
             let preferences = PrivacyPreferences {
                 allow_analytics,
                 share_data_with_third_party,
@@ -499,15 +640,15 @@ mod zk_compliance {
                 privacy_level,
                 encrypted_metadata,
             };
-            
+
             self.privacy_preferences.insert(caller, &preferences);
-            
+
             self.env().emit_event(PrivacyPreferencesUpdated {
                 account: caller,
                 privacy_level,
                 timestamp: self.env().block_timestamp(),
             });
-            
+
             Ok(())
         }
 
@@ -515,7 +656,7 @@ mod zk_compliance {
         #[ink(message)]
         pub fn grant_proof_consent(&mut self, proof_types: Vec<ZkProofType>) -> Result<()> {
             let caller = self.env().caller();
-            
+
             // In a real implementation, this would store consent for specific proof types
             // For now, we'll just verify that the user has appropriate privacy settings
             let prefs = self.privacy_preferences.get(caller).unwrap_or(PrivacyPreferences {
@@ -525,17 +666,17 @@ mod zk_compliance {
                 privacy_level: 3,
                 encrypted_metadata: vec![],
             });
-            
+
             // Check if user has given consent to process data
             if prefs.privacy_level < 2 {
                 return Err(Error::PrivacyControlsViolation);
             }
-            
+
             // Update consent timestamp
             let mut updated_prefs = prefs;
             updated_prefs.consent_timestamp = self.env().block_timestamp();
             self.privacy_preferences.insert(caller, &updated_prefs);
-            
+
             Ok(())
         }
 
@@ -543,7 +684,7 @@ mod zk_compliance {
         #[ink(message)]
         pub fn revoke_proof_consent(&mut self, proof_types: Vec<ZkProofType>) -> Result<()> {
             let caller = self.env().caller();
-            
+
             // In a real implementation, this would revoke consent for specific proof types
             // For now, we'll just update the consent timestamp
             let prefs = self.privacy_preferences.get(caller).unwrap_or(PrivacyPreferences {
@@ -553,12 +694,12 @@ mod zk_compliance {
                 privacy_level: 3,
                 encrypted_metadata: vec![],
             });
-            
+
             // Update consent timestamp
             let mut updated_prefs = prefs;
             updated_prefs.consent_timestamp = self.env().block_timestamp();
             self.privacy_preferences.insert(caller, &updated_prefs);
-            
+
             Ok(())
         }
 
@@ -595,7 +736,7 @@ mod zk_compliance {
         ) -> Result<()> {
             // Find the latest proof of this type for the account
             let current_id = self.proof_counter.get(account).unwrap_or(0);
-            
+
             for proof_id in (1..=current_id).rev() {
                 if let Some(mut proof) = self.zk_proofs.get((account, proof_id)) {
                     if proof.proof_type == proof_type {
@@ -614,7 +755,7 @@ mod zk_compliance {
                     }
                 }
             }
-            
+
             Err(Error::ProofNotFound)
         }
 
@@ -628,7 +769,7 @@ mod zk_compliance {
         ) -> Result<[u8; 32]> {
             // This would typically create a ZK proof that the user meets certain criteria
             // without revealing the underlying data
-            
+
             // For this implementation, we'll create a pseudo-certificate
             // that attests to compliance without revealing details
             let proof_type = match certificate_type {
@@ -637,12 +778,12 @@ mod zk_compliance {
                 2 => ZkProofType::AccreditedInvestor,
                 _ => ZkProofType::ComplianceCheck,
             };
-            
+
             // Check if user already has the required proof
             if !self.is_zk_proof_valid(account, proof_type) {
                 return Err(Error::VerificationFailed);
             }
-            
+
             // Create a certificate identifier (in a real system this would be derived differently)
             let now = self.env().block_timestamp();
             let cert_id = [
@@ -654,7 +795,7 @@ mod zk_compliance {
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
             ];
-            
+
             Ok(cert_id)
         }
 
@@ -700,12 +841,12 @@ mod zk_compliance {
             metadata_hash: [u8; 32] // Hash of metadata instead of actual data
         ) -> Result<()> {
             let caller = self.env().caller();
-            
+
             // Only allow account owner or approved verifiers to create audit entries
             if caller != account && !self.approved_verifiers.get(caller).unwrap_or(false) {
                 return Err(Error::NotAuthorized);
             }
-            
+
             // Create an audit log that doesn't expose sensitive information
             let log = AuditLog {
                 account,
@@ -714,11 +855,11 @@ mod zk_compliance {
                 timestamp: self.env().block_timestamp(),
                 action: action_type,
             };
-            
+
             let count = self.audit_log_count.get(account).unwrap_or(0);
             self.audit_logs.insert((account, count), &log);
             self.audit_log_count.insert(account, &(count + 1));
-            
+
             Ok(())
         }
 
@@ -727,13 +868,13 @@ mod zk_compliance {
         pub fn get_anonymized_compliance_stats(&self) -> Result<Vec<u8>> {
             // Return aggregated statistics without identifying individuals
             let stats = &self.verification_stats;
-            
+
             // Serialize the stats in a privacy-preserving way
             let mut result = Vec::new();
             result.extend_from_slice(&stats.total_verifications.to_le_bytes());
             result.extend_from_slice(&stats.successful_verifications.to_le_bytes());
             result.extend_from_slice(&stats.failed_verifications.to_le_bytes());
-            
+
             Ok(result)
         }
 
@@ -745,33 +886,33 @@ mod zk_compliance {
         ) -> Result<Vec<u8>> {
             // Generate a report that aggregates data without exposing individuals
             let mut report_data = Vec::new();
-            
+
             // Add general statistics
             report_data.extend_from_slice(&self.verification_stats.total_verifications.to_le_bytes());
             report_data.extend_from_slice(&self.verification_stats.successful_verifications.to_le_bytes());
             report_data.extend_from_slice(&self.verification_stats.failed_verifications.to_le_bytes());
-            
+
             // Add report type indicator
             report_data.push(report_type);
-            
+
             // Add timestamp
             report_data.extend_from_slice(&self.verification_stats.last_updated.to_le_bytes());
-            
+
             Ok(report_data)
         }
 
         /// Get all ZK proofs for an account
         #[ink(message)]
         pub fn get_account_proofs(&self, account: AccountId) -> Vec<(u64, ZkProofData)> {
-            let mut proofs = Vec::new(); 
+            let mut proofs = Vec::new();
             let count = self.proof_counter.get(account).unwrap_or(0);
-        
+
             for proof_id in 1..=count {
                 if let Some(proof) = self.zk_proofs.get((account, proof_id)) {
                     proofs.push((proof_id, proof));
                 }
             }
-        
+
             proofs
         }
 
@@ -782,25 +923,25 @@ mod zk_compliance {
             let preferences = self.privacy_preferences.get(account);
             let compliance_data = self.zk_compliance_data.get(account);
             let audit_logs = self.get_audit_logs(account, 10); // Last 10 logs
-            
+
             let active_proofs = proofs.iter()
                 .filter(|(_, proof)| {
                     let now = self.env().block_timestamp();
                     proof.status == ZkProofStatus::Verified && proof.expires_at > now
                 })
                 .count() as u32;
-            
+
             let expired_proofs = proofs.iter()
                 .filter(|(_, proof)| {
                     let now = self.env().block_timestamp();
                     proof.expires_at <= now
                 })
                 .count() as u32;
-            
+
             let pending_proofs = proofs.iter()
                 .filter(|(_, proof)| proof.status == ZkProofStatus::Pending)
                 .count() as u32;
-            
+
             PrivacyDashboard {
                 account,
                 active_proofs,
@@ -826,9 +967,9 @@ mod zk_compliance {
             if new_privacy_level > 5 {
                 return Err(Error::InvalidPrivacyLevel);
             }
-            
+
             let caller = self.env().caller();
-            
+
             // Get existing preferences or create new ones
             let existing_prefs = self.privacy_preferences.get(caller).unwrap_or(PrivacyPreferences {
                 allow_analytics: false,
@@ -837,7 +978,7 @@ mod zk_compliance {
                 privacy_level: 3,
                 encrypted_metadata: vec![],
             });
-            
+
             // Update preferences
             let updated_prefs = PrivacyPreferences {
                 allow_analytics,
@@ -846,15 +987,15 @@ mod zk_compliance {
                 privacy_level: new_privacy_level,
                 encrypted_metadata,
             };
-            
+
             self.privacy_preferences.insert(caller, &updated_prefs);
-            
+
             self.env().emit_event(PrivacyPreferencesUpdated {
                 account: caller,
                 privacy_level: new_privacy_level,
                 timestamp: self.env().block_timestamp(),
             });
-            
+
             Ok(())
         }
 
@@ -863,11 +1004,11 @@ mod zk_compliance {
         pub fn get_compliance_status_summary(&self, account: AccountId) -> ComplianceStatusSummary {
             let compliance_data = self.zk_compliance_data.get(account);
             let proofs = self.get_account_proofs(account);
-            
+
             let mut identity_verified = false;
             let mut financial_verified = false;
             let mut accredited_investor = false;
-            
+
             for (_, proof) in proofs {
                 let now = self.env().block_timestamp();
                 if proof.status == ZkProofStatus::Verified && proof.expires_at > now {
@@ -879,7 +1020,7 @@ mod zk_compliance {
                     }
                 }
             }
-            
+
             ComplianceStatusSummary {
                 account,
                 identity_verified,
@@ -890,111 +1031,78 @@ mod zk_compliance {
                 next_verification_due: compliance_data.as_ref().map(|d| d.next_required_verification).unwrap_or(0),
             }
         }
-        
-        /// Verify identity without revealing personal information
+
+        /// Verify identity without revealing personal information.
+        ///
+        /// The single public input must equal BLAKE2b-256 of the SCALE-encoded
+        /// statement `(age_requirement, country_code)`; the proof is verified
+        /// against the registered key for [`ZkProofType::AgeVerification`].
         #[ink(message)]
         pub fn verify_identity_zk(&mut self, age_requirement: u8, country_code: u16, proof_data: Vec<u8>) -> Result<()> {
             let caller = self.env().caller();
-                    
-            // Extract public inputs from proof_data (this is simplified - in practice would parse ZKP)
-            // For this example, we'll simulate the verification
-            let public_inputs = vec![[0u8; 32]]; // Placeholder
-                    
-            // Submit age verification proof
-            let age_proof_id = self.submit_zk_proof(
+
+            let statement = (age_requirement, country_code).encode();
+            let public_input = self.bind_public_input(&statement);
+
+            self.verify_and_store_proof(
+                caller,
                 ZkProofType::AgeVerification,
-                public_inputs.clone(),
-                proof_data.clone(),
-                vec![age_requirement as u8]
-            )?;
-                    
-            // Verify the proof automatically if requirements are met
-            // In a real system, this would involve actual ZK verification
-            let now = self.env().block_timestamp();
-            let expires_at = now + (365 * 24 * 60 * 60 * 1000);
-                    
-            let mut proof = self.zk_proofs.get((caller, age_proof_id))
-                .ok_or(Error::ProofNotFound)?;
-            proof.status = ZkProofStatus::Verified;
-            proof.created_at = now;
-            proof.expires_at = expires_at;
-                    
-            self.zk_proofs.insert((caller, age_proof_id), &proof);
-                    
-            // Log audit event
-            self.log_audit_event(caller, ZkProofType::AgeVerification, ZkProofStatus::Verified, 1);
-                    
-            // Update compliance data
-            self.update_compliance_data(caller)?;
-                    
-            Ok(())
-        }
-        
-        /// Verify financial standing without revealing exact amounts
-        #[ink(message)]
-        pub fn verify_financial_standing_zk(&mut self, min_income_usd: u64, proof_data: Vec<u8>) -> Result<()> {
-            let caller = self.env().caller();
-                    
-            // Submit income verification proof
-            let income_proof_id = self.submit_zk_proof(
-                ZkProofType::IncomeVerification,
-                vec![[0u8; 32]], // Public inputs placeholder
+                vec![public_input],
                 proof_data,
-                min_income_usd.to_le_bytes().to_vec()
+                statement,
             )?;
-                    
-            // Simulate verification
-            let now = self.env().block_timestamp();
-            let mut proof = self.zk_proofs.get((caller, income_proof_id))
-                .ok_or(Error::ProofNotFound)?;
-            proof.status = ZkProofStatus::Verified;
-            proof.created_at = now;
-            proof.expires_at = now + (365 * 24 * 60 * 60 * 1000);
-                    
-            self.zk_proofs.insert((caller, income_proof_id), &proof);
-                    
-            // Log audit event
-            self.log_audit_event(caller, ZkProofType::IncomeVerification, ZkProofStatus::Verified, 1);
-                    
-            // Update compliance data
-            self.update_compliance_data(caller)?;
-                    
-            Ok(())
-        }
-        
-        /// Verify accredited investor status without revealing financial details
-        #[ink(message)]
-        pub fn verify_accredited_investor_zk(&mut self, proof_data: Vec<u8>) -> Result<()> {
-            let caller = self.env().caller();
-                    
-            // Submit accredited investor verification proof
-            let ai_proof_id = self.submit_zk_proof(
-                ZkProofType::AccreditedInvestor,
-                vec![[0u8; 32]], // Public inputs placeholder
-                proof_data,
-                vec![1] // Indicator for accredited investor
-            )?;
-                    
-            // Simulate verification
-            let now = self.env().block_timestamp();
-            let mut proof = self.zk_proofs.get((caller, ai_proof_id))
-                .ok_or(Error::ProofNotFound)?;
-            proof.status = ZkProofStatus::Verified;
-            proof.created_at = now;
-            proof.expires_at = now + (365 * 24 * 60 * 60 * 1000);
-                    
-            self.zk_proofs.insert((caller, ai_proof_id), &proof);
-                    
-            // Log audit event
-            self.log_audit_event(caller, ZkProofType::AccreditedInvestor, ZkProofStatus::Verified, 1);
-                    
-            // Update compliance data
-            self.update_compliance_data(caller)?;
-                    
+
             Ok(())
         }
 
-        /// Submit confidential transaction data using ZK proofs
+        /// Verify financial standing without revealing exact amounts.
+        ///
+        /// The single public input must equal BLAKE2b-256 of the SCALE-encoded
+        /// statement `min_income_usd`.
+        #[ink(message)]
+        pub fn verify_financial_standing_zk(&mut self, min_income_usd: u64, proof_data: Vec<u8>) -> Result<()> {
+            let caller = self.env().caller();
+
+            let statement = min_income_usd.encode();
+            let public_input = self.bind_public_input(&statement);
+
+            self.verify_and_store_proof(
+                caller,
+                ZkProofType::IncomeVerification,
+                vec![public_input],
+                proof_data,
+                statement,
+            )?;
+
+            Ok(())
+        }
+
+        /// Verify accredited investor status without revealing financial details.
+        ///
+        /// The single public input must equal BLAKE2b-256 of the constant
+        /// statement marker (`1u8`).
+        #[ink(message)]
+        pub fn verify_accredited_investor_zk(&mut self, proof_data: Vec<u8>) -> Result<()> {
+            let caller = self.env().caller();
+
+            let statement = 1u8.encode();
+            let public_input = self.bind_public_input(&statement);
+
+            self.verify_and_store_proof(
+                caller,
+                ZkProofType::AccreditedInvestor,
+                vec![public_input],
+                proof_data,
+                statement,
+            )?;
+
+            Ok(())
+        }
+
+        /// Submit confidential transaction data using ZK proofs.
+        ///
+        /// The single public input must equal BLAKE2b-256 of the SCALE-encoded
+        /// statement `(transaction_type, amount, asset_type)`.
         #[ink(message)]
         pub fn submit_confidential_transaction(
             &mut self,
@@ -1004,42 +1112,24 @@ mod zk_compliance {
             proof_data: Vec<u8>,  // ZK proof that user is compliant
         ) -> Result<()> {
             let caller = self.env().caller();
-            
-            // Verify that the user has appropriate ZK proofs for the transaction
-            let required_proofs = match transaction_type {
-                0 | 1 => vec![ZkProofType::IdentityVerification, ZkProofType::ComplianceCheck], // Buy/Sell
-                2 => vec![ZkProofType::IdentityVerification, ZkProofType::ComplianceCheck],   // Transfer
-                _ => vec![ZkProofType::IdentityVerification],                               // Other
-            };
-            
-            // Verify the submitted ZK proof is valid
-            // In a real implementation, this would perform actual ZK verification
-            let now = self.env().block_timestamp();
-            
-            // Create a confidential transaction record without revealing sensitive details
-            let tx_proof_id = self.submit_zk_proof(
+
+            let statement = (transaction_type, amount, asset_type).encode();
+            let public_input = self.bind_public_input(&statement);
+
+            self.verify_and_store_proof(
+                caller,
                 ZkProofType::ComplianceCheck,
-                vec![[transaction_type as u8; 32]], // Simplified public inputs
+                vec![public_input],
                 proof_data,
-                [amount.to_le_bytes().as_slice(), &[asset_type]].concat()
+                statement,
             )?;
-            
-            // Automatically approve if the ZK proof is valid
-            let mut proof = self.zk_proofs.get((caller, tx_proof_id))
-                .ok_or(Error::ProofNotFound)?;
-            proof.status = ZkProofStatus::Verified;
-            proof.created_at = now;
-            proof.expires_at = now + (30 * 24 * 60 * 60 * 1000); // 30 days for transaction
-            
-            self.zk_proofs.insert((caller, tx_proof_id), &proof);
-            
-            // Log audit event
-            self.log_audit_event(caller, ZkProofType::ComplianceCheck, ZkProofStatus::Verified, 1);
-            
+
             Ok(())
         }
 
-        /// Create confidential property ownership proof
+        /// Create confidential property ownership proof.
+        ///
+        /// The single public input must equal BLAKE2b-256 of the property id.
         #[ink(message)]
         pub fn create_property_ownership_proof(
             &mut self,
@@ -1047,32 +1137,25 @@ mod zk_compliance {
             proof_data: Vec<u8>
         ) -> Result<()> {
             let caller = self.env().caller();
-            
-            // Submit property ownership proof
-            let ownership_proof_id = self.submit_zk_proof(
+
+            let statement = property_id.to_vec();
+            let public_input = self.bind_public_input(&statement);
+
+            self.verify_and_store_proof(
+                caller,
                 ZkProofType::PropertyOwnership,
-                vec![property_id],
+                vec![public_input],
                 proof_data,
-                property_id.to_vec()
+                statement,
             )?;
-            
-            // Simulate verification
-            let now = self.env().block_timestamp();
-            let mut proof = self.zk_proofs.get((caller, ownership_proof_id))
-                .ok_or(Error::ProofNotFound)?;
-            proof.status = ZkProofStatus::Verified;
-            proof.created_at = now;
-            proof.expires_at = now + (365 * 24 * 60 * 60 * 1000);
-            
-            self.zk_proofs.insert((caller, ownership_proof_id), &proof);
-            
-            // Log audit event
-            self.log_audit_event(caller, ZkProofType::PropertyOwnership, ZkProofStatus::Verified, 1);
-            
+
             Ok(())
         }
 
-        /// Verify property ownership using ZK-SNARK without revealing ownership details
+        /// Verify property ownership using ZK-SNARK without revealing ownership details.
+        ///
+        /// The single public input must equal BLAKE2b-256 of the SCALE-encoded
+        /// statement `(property_id, owner_public_key)`.
         #[ink(message)]
         pub fn verify_property_ownership_zk(
             &mut self,
@@ -1081,41 +1164,24 @@ mod zk_compliance {
             proof_data: Vec<u8>          // ZK proof of ownership
         ) -> Result<()> {
             let caller = self.env().caller();
-            
-            // Create public inputs for the ZK proof
-            let mut public_inputs = Vec::new();
-            public_inputs.push(property_id);
-            public_inputs.push(owner_public_key);
-            
-            // Submit property ownership verification proof
-            let ownership_proof_id = self.submit_zk_proof(
+
+            let statement = (property_id, owner_public_key).encode();
+            let public_input = self.bind_public_input(&statement);
+
+            self.verify_and_store_proof(
+                caller,
                 ZkProofType::PropertyOwnership,
-                public_inputs,
+                vec![public_input],
                 proof_data,
-                [property_id.to_vec(), owner_public_key.to_vec()].concat()
+                statement,
             )?;
-            
-            // In a real ZK-SNARK implementation, this would verify the proof
-            // For now, we'll simulate successful verification
-            let now = self.env().block_timestamp();
-            let mut proof = self.zk_proofs.get((caller, ownership_proof_id))
-                .ok_or(Error::ProofNotFound)?;
-            proof.status = ZkProofStatus::Verified;
-            proof.created_at = now;
-            proof.expires_at = now + (365 * 24 * 60 * 60 * 1000);
-            
-            self.zk_proofs.insert((caller, ownership_proof_id), &proof);
-            
-            // Log audit event
-            self.log_audit_event(caller, ZkProofType::PropertyOwnership, ZkProofStatus::Verified, 1);
-            
-            // Update compliance data
-            self.update_compliance_data(caller)?;
-            
+
             Ok(())
         }
 
-        /// Verify address ownership using ZK proof
+        /// Verify address ownership using ZK proof.
+        ///
+        /// The single public input must equal BLAKE2b-256 of the address hash.
         #[ink(message)]
         pub fn verify_address_ownership_zk(
             &mut self,
@@ -1123,108 +1189,142 @@ mod zk_compliance {
             proof_data: Vec<u8>
         ) -> Result<()> {
             let caller = self.env().caller();
-            
-            // Submit address ownership proof
-            let address_proof_id = self.submit_zk_proof(
+
+            let statement = address_hash.to_vec();
+            let public_input = self.bind_public_input(&statement);
+
+            self.verify_and_store_proof(
+                caller,
                 ZkProofType::AddressOwnership,
-                vec![address_hash],
+                vec![public_input],
                 proof_data,
-                address_hash.to_vec()
+                statement,
             )?;
-            
-            // Simulate verification
-            let now = self.env().block_timestamp();
-            let mut proof = self.zk_proofs.get((caller, address_proof_id))
-                .ok_or(Error::ProofNotFound)?;
-            proof.status = ZkProofStatus::Verified;
-            proof.created_at = now;
-            proof.expires_at = now + (365 * 24 * 60 * 60 * 1000);
-            
-            self.zk_proofs.insert((caller, address_proof_id), &proof);
-            
-            // Log audit event
-            self.log_audit_event(caller, ZkProofType::AddressOwnership, ZkProofStatus::Verified, 1);
-            
+
             Ok(())
         }
 
         // --- Internal helper functions ---
-        /// Validate proof data using the configured ZK backend or the fallback simulator.
+        /// Validate proof data using the configured ZK backend.
+        ///
+        /// When the `zk` feature is disabled the function returns `Ok(false)`
+        /// — proofs are *rejected*, never auto-approved.
         fn perform_zk_verification(&self, proof: &ZkProofData) -> Result<bool> {
-            // This is where the actual ZK proof verification would occur
-            // In a real implementation, this would use arkworks or similar libraries
-            // to verify that the proof is valid without revealing the underlying data
-            
-            // For this simulation, we'll check that the proof data is non-empty
-            // and that the public inputs match the expected format
-            if proof.proof_data.is_empty() {
-                return Ok(false);
-            }
-            
-            // In a real ZK-SNARK implementation, this would verify the proof
-            // against the public inputs and the verification key
             #[cfg(feature = "zk")]
             {
-                // Attempt to deserialize the proof and verify it
-                match self.deserialize_and_verify_zk_proof(proof) {
-                    Ok(is_valid) => Ok(is_valid),
-                    Err(_) => Ok(false), // If deserialization fails, proof is invalid
-                }
+                // Real Groth16 verification against the registered key.
+                let is_valid = self.deserialize_and_verify_zk_proof(proof)?;
+                Ok(is_valid)
             }
             #[cfg(not(feature = "zk"))]
             {
-                // When ZK feature is disabled, we'll just simulate verification
-                // In a production environment, you'd want to verify against some stored verification keys
-                Ok(true)
+                // No ZK backend compiled in: an unverifiable proof must not be
+                // approved. Compile with `--features zk` and register a
+                // verification key to accept proofs.
+                let _ = proof;
+                Ok(false)
             }
         }
 
-        /// Decode and verify a submitted proof with arkworks when the `zk` feature is enabled.
+        /// Decode and verify a submitted proof with arkworks when the `zk`
+        /// feature is enabled.
         #[cfg(feature = "zk")]
-        fn deserialize_and_verify_zk_proof(&self, proof: &ZkProofData) -> core::result::Result<bool, ()> {
-            // This function would deserialize the proof data and verify it using arkworks
-            // For this implementation, we'll outline the structure but not implement the full deserialization
-            // because actual ZK proof serialization/deserialization is complex
-            
-            // In a real implementation, you would:
-            // 1. Deserialize the proof from proof_data
-            // 2. Deserialize the public inputs
-            // 3. Load the appropriate verification key based on proof_type
-            // 4. Call the SNARK verification algorithm
-            // 5. Return the result
-            
-            // For this contract, we'll simulate the process
-            // Since we can't easily deserialize complex ZK structures in ink!,
-            // we'll just return true if the proof data seems valid
-            
-            // Check if proof data has minimum expected length
-            if proof.proof_data.len() < 10 { // Minimum length check
-                return Err(());
+        fn deserialize_and_verify_zk_proof(&self, proof: &ZkProofData) -> Result<bool> {
+            if !verification_keys::validate_public_inputs(&proof.public_inputs) {
+                return Err(Error::InvalidInputs);
             }
-            
-            // In a real implementation, we would do something like:
-            /*
-            let proof_struct: Proof<Bn254> = deserialize_proof(&proof.proof_data).map_err(|_| ())?;
-            let public_inputs: Vec<Fr> = deserialize_public_inputs(&proof.public_inputs).map_err(|_| ())?;
-            let vk = self.load_verification_key(proof.proof_type).map_err(|_| ())?;
-            
-            let is_valid = Groth16::<Bn254>::verify(&vk, &public_inputs, &proof_struct)
-                .map_err(|_| ())?;
-            
-            Ok(is_valid)
-            */
-            
-            // For now, return true if proof looks valid
-            Ok(true)
+            if !verification_keys::validate_proof_payload(&proof.proof_data) {
+                return Err(Error::InvalidProof);
+            }
+
+            let record = self
+                .verification_keys
+                .get(&(proof.proof_type as u8))
+                .ok_or(Error::VerificationKeyNotFound)?;
+            if !record.is_active {
+                return Err(Error::VerificationKeyNotFound);
+            }
+
+            let vk = verification_keys::deserialize_vk(&record.serialized_vk)
+                .map_err(|_| Error::InvalidVerificationKey)?;
+            let public_inputs: Vec<Fr> = proof
+                .public_inputs
+                .iter()
+                .map(|bytes| Fr::from_le_bytes_mod_order(bytes.as_slice()))
+                .collect();
+            let proof_struct = verification_keys::deserialize_proof(&proof.proof_data)
+                .map_err(|_| Error::InvalidProof)?;
+
+            let pvk = PreparedVerifyingKey::from(vk);
+            Groth16::<Bn254>::verify_with_processed_vk(&pvk, &public_inputs, &proof_struct)
+                .map_err(|_| Error::VerificationFailed)
         }
 
-        /// Load the verification key associated with a proof type.
-        #[cfg(feature = "zk")]
-        fn load_verification_key(&self, proof_type: ZkProofType) -> core::result::Result<VerifyingKey<Bn254>, ()> {
-            // In a real implementation, this would load the appropriate verification key
-            // from contract storage based on the proof type
-            // This is a placeholder implementation
-            Err(()) // Not implemented in this example
+        /// Hash a statement into the single 32-byte public input expected by
+        /// the off-chain prover.
+        ///
+        /// The public input is `BLAKE2b-256(statement) mod r`, where `r` is the
+        /// Bn254 scalar field order — matching the prover's
+        /// `Fr::from_le_bytes_mod_order(BLAKE2b-256(statement))` exactly so the
+        /// canonicality gate and proof verification agree byte-for-byte (a raw
+        /// hash exceeds `r` with probability ≈ 81%).
+        fn bind_public_input(&self, statement: &[u8]) -> [u8; 32] {
+            use ink::env::hash::{Blake2x256, HashOutput};
+
+            let mut output = <Blake2x256 as HashOutput>::Type::default();
+            self.env().hash_bytes::<Blake2x256>(statement, &mut output);
+            verification_keys::reduce_mod_bn254(&output)
+        }
+
+        /// Submit a proof and verify it with the real backend before marking it
+        /// `Verified`. Unverifiable proofs are stored as `Rejected`.
+        fn verify_and_store_proof(
+            &mut self,
+            account: AccountId,
+            proof_type: ZkProofType,
+            public_inputs: Vec<[u8; 32]>,
+            proof_data: Vec<u8>,
+            metadata: Vec<u8>,
+        ) -> Result<u64> {
+            let proof_id = self.submit_zk_proof(proof_type, public_inputs, proof_data, metadata)?;
+
+            let mut proof = self
+                .zk_proofs
+                .get((account, proof_id))
+                .ok_or(Error::ProofNotFound)?;
+
+            let valid = self.perform_zk_verification(&proof)?;
+            if !valid {
+                // Never leave an unverifiable proof pending: mark it rejected.
+                proof.status = ZkProofStatus::Rejected;
+                self.zk_proofs.insert((account, proof_id), &proof);
+                self.log_audit_event(account, proof_type, ZkProofStatus::Rejected, 2);
+                self.verification_stats.failed_verifications += 1;
+                self.verification_stats.total_verifications += 1;
+                self.verification_stats.last_updated = self.env().block_timestamp();
+                return Err(Error::VerificationFailed);
+            }
+
+            let now = self.env().block_timestamp();
+            proof.status = ZkProofStatus::Verified;
+            proof.created_at = now;
+            proof.expires_at = now + (365 * 24 * 60 * 60 * 1000);
+            self.zk_proofs.insert((account, proof_id), &proof);
+
+            self.log_audit_event(account, proof_type, ZkProofStatus::Verified, 1);
+            self.verification_stats.successful_verifications += 1;
+            self.verification_stats.total_verifications += 1;
+            self.verification_stats.last_updated = now;
+
+            self.env().emit_event(ZkProofVerified {
+                account,
+                proof_id,
+                timestamp: now,
+            });
+
+            self.update_compliance_data(account)?;
+
+            Ok(proof_id)
         }
 
         /// Increment and return the next proof identifier for an account.
@@ -1322,7 +1422,7 @@ mod zk_compliance {
         }
 
         #[ink::test]
-        fn submit_and_verify_zk_proof_works() {
+        fn submit_and_verify_zk_proof_rejects_unverifiable() {
             let mut contract = ZkCompliance::new();
             let user = AccountId::from([0x02; 32]);
             let verifier = AccountId::from([0x03; 32]);
@@ -1334,7 +1434,7 @@ mod zk_compliance {
             let public_inputs = vec![[1u8; 32]];
             let proof_data = vec![2u8, 3u8, 4u8];
             let metadata = vec![5u8, 6u8];
-            
+
             let proof_id = contract.submit_zk_proof(
                 ZkProofType::IdentityVerification,
                 public_inputs.clone(),
@@ -1344,11 +1444,79 @@ mod zk_compliance {
 
             assert_eq!(proof_id, 1);
 
-            // Verify the proof
-            assert!(contract.verify_zk_proof(user, proof_id, true).is_ok());
+            // Verify the proof. Without a registered verification key (and with
+            // no ZK backend in the default build) the proof must NOT be
+            // auto-approved — it is either rejected or the call fails loudly.
+            match contract.verify_zk_proof(user, proof_id, true) {
+                Ok(()) => {
+                    // Default build (no `zk` feature): the proof is rejected.
+                    assert!(
+                        !contract.is_zk_proof_valid(user, ZkProofType::IdentityVerification),
+                        "unverifiable proof must not be marked valid"
+                    );
+                }
+                Err(_) => {
+                    // `zk` feature build without a registered key: loud failure.
+                }
+            }
+        }
 
-            // Check if proof is valid
-            assert!(contract.is_zk_proof_valid(user, ZkProofType::IdentityVerification));
+        #[ink::test]
+        fn verification_key_management_works() {
+            let mut contract = ZkCompliance::new();
+            let owner = AccountId::from([0x01; 32]);
+            let stranger = AccountId::from([0x09; 32]);
+
+            // Non-owner cannot set a key.
+            ink::env::test::set_caller::<ink::env::DefaultEnvironment>(stranger);
+            assert_eq!(
+                contract.set_verification_key(
+                    ZkProofType::IdentityVerification,
+                    vec![7u8; 64],
+                    [0u8; 32],
+                ),
+                Err(Error::NotAuthorized)
+            );
+
+            // Owner sets a key.
+            ink::env::test::set_caller::<ink::env::DefaultEnvironment>(owner);
+            contract
+                .set_verification_key(
+                    ZkProofType::IdentityVerification,
+                    vec![7u8; 64],
+                    [1u8; 32],
+                )
+                .unwrap();
+
+            let record = contract
+                .get_verification_key(ZkProofType::IdentityVerification)
+                .expect("key should be registered");
+            assert_eq!(record.version, 1);
+            assert!(record.is_active);
+            assert_eq!(record.vk_hash, [1u8; 32]);
+
+            // Rotation bumps the version.
+            let version = contract
+                .rotate_verification_key(
+                    ZkProofType::IdentityVerification,
+                    vec![8u8; 64],
+                    [2u8; 32],
+                )
+                .unwrap();
+            assert_eq!(version, 2);
+            assert_eq!(
+                contract.get_verification_key_version(ZkProofType::IdentityVerification),
+                Some(2)
+            );
+
+            // Deactivation makes the key unusable.
+            contract
+                .deactivate_verification_key(ZkProofType::IdentityVerification)
+                .unwrap();
+            let record = contract
+                .get_verification_key(ZkProofType::IdentityVerification)
+                .expect("record should still exist");
+            assert!(!record.is_active);
         }
 
         #[ink::test]
@@ -1365,6 +1533,38 @@ mod zk_compliance {
             assert_eq!(prefs.allow_analytics, true);
             assert_eq!(prefs.share_data_with_third_party, false);
             assert_eq!(prefs.privacy_level, 4);
+        }
+
+        /// With the `zk` feature enabled, a malformed verification key must be
+        /// rejected at registration time and unregistered proof types must fail
+        /// verification loudly (never auto-approve).
+        #[cfg(feature = "zk")]
+        #[ink::test]
+        fn malformed_keys_and_proofs_are_rejected_with_zk() {
+            let mut contract = ZkCompliance::new();
+
+            // Garbage verification key bytes are rejected eagerly.
+            assert_eq!(
+                contract.set_verification_key(
+                    ZkProofType::ComplianceCheck,
+                    vec![0xabu8; 32],
+                    [0u8; 32],
+                ),
+                Err(Error::InvalidVerificationKey)
+            );
+
+            // No key registered => verification fails loudly instead of
+            // auto-approving.
+            let result = contract.verify_zk_proof_data(
+                ZkProofType::ComplianceCheck,
+                vec![[0u8; 32]],
+                vec![0u8; 10],
+            );
+            assert_eq!(result, Err(ZkVerifyError::VerificationKeyNotFound));
+
+            // Wrapper entry points also fail loudly without a registered key.
+            let wrapper_result = contract.verify_identity_zk(25, 840, vec![0u8; 10]);
+            assert_eq!(wrapper_result, Err(Error::VerificationKeyNotFound));
         }
     }
 }
