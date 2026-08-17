@@ -169,7 +169,16 @@ export class CryptoProvider implements OnModuleInit {
     if (!payload) return payload;
 
     const envelope = this.parseEnvelope(payload);
-    if (!envelope) return payload;
+    if (!envelope) {
+      // Fail closed for values that look like envelopes but carry an
+      // unsupported version; only genuine legacy plaintext passes through.
+      if (this.looksLikeEnvelope(payload)) {
+        throw new DecryptionFailedError(
+          'Unsupported envelope version or malformed envelope',
+        );
+      }
+      return payload;
+    }
 
     if (!this.isEnabled()) {
       throw new EncryptionKeyUnavailableError(
@@ -332,6 +341,15 @@ export class CryptoProvider implements OnModuleInit {
       decipher.update(Buffer.from(envelope.ct, 'base64')),
       decipher.final(),
     ]);
+  }
+
+  private looksLikeEnvelope(value: string): boolean {
+    try {
+      const parsed = JSON.parse(value) as Record<string, unknown>;
+      return Boolean(parsed && typeof parsed.v === 'number');
+    } catch {
+      return false;
+    }
   }
 
   private parseEnvelope(value: string): {

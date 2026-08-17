@@ -20,6 +20,11 @@ describe('VerifyEmailProvider (issue #435)', () => {
   let mailService: {
     VerificationEmail: jest.Mock;
   };
+  let cryptoProvider: {
+    isEnabled: jest.Mock;
+    encrypt: jest.Mock;
+    decrypt: jest.Mock;
+  };
 
   const sampleUser: any = {
     id: 1,
@@ -43,11 +48,20 @@ describe('VerifyEmailProvider (issue #435)', () => {
     mailService = {
       VerificationEmail: jest.fn().mockResolvedValue(undefined),
     };
+    cryptoProvider = {
+      isEnabled: jest.fn(() => false),
+      encrypt: jest.fn(async () => ({
+        ciphertext: 'envelope',
+        dekId: 'dek-1',
+      })),
+      decrypt: jest.fn(async () => JSON.stringify({ verificationToken: 'raw-token' })),
+    };
 
     provider = new VerifyEmailProvider(
       usersRepository as any,
       tokenProvider as any,
       mailService as any,
+      cryptoProvider as any,
     );
   });
 
@@ -74,6 +88,34 @@ describe('VerifyEmailProvider (issue #435)', () => {
       );
     });
 
+    it('stores an encrypted copy of the raw token when KEK is enabled (issue #631)', async () => {
+      cryptoProvider.isEnabled.mockReturnValue(true);
+
+      await provider.issueVerificationToken(sampleUser);
+
+      expect(cryptoProvider.encrypt).toHaveBeenCalledWith(
+        JSON.stringify({ verificationToken: 'raw-token' }),
+        { dekId: undefined },
+      );
+      expect(usersRepository.update).toHaveBeenCalledWith(
+        sampleUser.id,
+        expect.objectContaining({
+          encryptedData: 'envelope',
+          dataEncryptionKeyId: 'dek-1',
+        }),
+      );
+    });
+
+    it('does not persist plaintext when KEK is unavailable (issue #631)', async () => {
+      await provider.issueVerificationToken(sampleUser);
+
+      expect(cryptoProvider.encrypt).not.toHaveBeenCalled();
+      expect(usersRepository.update).toHaveBeenCalledWith(
+        sampleUser.id,
+        expect.objectContaining({ encryptedData: null }),
+      );
+    });
+
     it('does NOT throw if mail send fails (logs only)', async () => {
       mailService.VerificationEmail.mockRejectedValueOnce(
         new Error('SMTP down'),
@@ -96,7 +138,48 @@ describe('VerifyEmailProvider (issue #435)', () => {
         emailVerified: true,
         emailVerificationToken: null,
         emailVerificationExpires: null,
+        encryptedData: null,
       });
+    });
+
+    it('matches via the decrypted envelope when the hash path misses (issue #631)', async () => {
+      cryptoProvider.isEnabled.mockReturnValue(true);
+      usersRepository.find.mockResolvedValueOnce([
+        {
+          ...sampleUser,
+          encryptedData: 'envelope',
+        },
+      ]);
+      cryptoProvider.decrypt.mockResolvedValueOnce(
+        JSON.stringify({ verificationToken: 'raw-token' }),
+      );
+
+      const result = await provider.verifyEmail('raw-token');
+
+      expect(cryptoProvider.decrypt).toHaveBeenCalledWith('envelope');
+      expect(result.id).toBe(sampleUser.id);
+      expect(usersRepository.update).toHaveBeenCalledWith(sampleUser.id, {
+        emailVerified: true,
+        emailVerificationToken: null,
+        emailVerificationExpires: null,
+        encryptedData: null,
+      });
+    });
+
+    it('treats a token as invalid when decryption fails', async () => {
+      cryptoProvider.isEnabled.mockReturnValue(true);
+      usersRepository.find.mockResolvedValueOnce([
+        {
+          ...sampleUser,
+          encryptedData: 'envelope',
+        },
+      ]);
+      cryptoProvider.decrypt.mockRejectedValueOnce(new Error('bad tag'));
+
+      await expect(provider.verifyEmail('raw-token')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(usersRepository.update).not.toHaveBeenCalled();
     });
 
     it('throws UnauthorizedException when no candidate user matches', async () => {

@@ -35,6 +35,11 @@ describe('RefreshTokenProvider', () => {
     comparePassword: jest.Mock;
   };
   let generateTokenProvider: { generateTokens: jest.Mock };
+  let cryptoProvider: {
+    isEnabled: jest.Mock;
+    encrypt: jest.Mock;
+    decrypt: jest.Mock;
+  };
 
   const jwtConfig = {
     secret: 'secret',
@@ -79,6 +84,14 @@ describe('RefreshTokenProvider', () => {
         jti: 'new-jti',
       })),
     };
+    cryptoProvider = {
+      isEnabled: jest.fn(() => false),
+      encrypt: jest.fn(async () => ({
+        ciphertext: 'envelope',
+        dekId: 'dek-1',
+      })),
+      decrypt: jest.fn(async () => 'valid'),
+    };
 
     provider = new RefreshTokenProvider(
       userService as any,
@@ -87,6 +100,7 @@ describe('RefreshTokenProvider', () => {
       refreshTokenRepository as any,
       hashingProvider as any,
       generateTokenProvider as any,
+      cryptoProvider as any,
     );
   });
 
@@ -141,6 +155,47 @@ describe('RefreshTokenProvider', () => {
       await expect(
         provider.refreshToken({ refreshToken: 'valid' } as any),
       ).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+
+    it('validates via the encrypted copy when present (issue #631)', async () => {
+      cryptoProvider.isEnabled.mockReturnValue(true);
+      refreshTokenRepository.findOne.mockResolvedValueOnce({
+        ...storedToken,
+        encryptedData: 'envelope',
+        dataEncryptionKeyId: 'dek-1',
+      });
+      cryptoProvider.decrypt.mockResolvedValueOnce('valid');
+
+      const result = await provider.refreshToken({
+        refreshToken: 'valid',
+      } as any);
+
+      expect(cryptoProvider.decrypt).toHaveBeenCalledWith('envelope');
+      expect(hashingProvider.comparePassword).not.toHaveBeenCalled();
+      expect(result.access_token).toBe('new-access');
+      expect(refreshTokenRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          encryptedData: 'envelope',
+          dataEncryptionKeyId: 'dek-1',
+        }),
+      );
+    });
+
+    it('falls back to the bcrypt hash when decryption fails (issue #631)', async () => {
+      cryptoProvider.isEnabled.mockReturnValue(true);
+      refreshTokenRepository.findOne.mockResolvedValueOnce({
+        ...storedToken,
+        encryptedData: 'envelope',
+      });
+      cryptoProvider.decrypt.mockRejectedValueOnce(new Error('bad tag'));
+
+      const result = await provider.refreshToken({
+        refreshToken: 'valid',
+      } as any);
+
+      expect(cryptoProvider.decrypt).toHaveBeenCalled();
+      expect(hashingProvider.comparePassword).toHaveBeenCalled();
+      expect(result.access_token).toBe('new-access');
     });
 
     it('throws UnauthorizedException when verification fails', async () => {

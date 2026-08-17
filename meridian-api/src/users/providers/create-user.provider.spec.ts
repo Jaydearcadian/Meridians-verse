@@ -29,6 +29,13 @@ describe('CreateUserProvider', () => {
   };
   let hashingProvider: { hashPassword: jest.Mock };
   let mailService: { WelcomeEmail: jest.Mock };
+  let cryptoProvider: {
+    isEnabled: jest.Mock;
+    createDek: jest.Mock;
+    attachDekToUser: jest.Mock;
+    encrypt: jest.Mock;
+    decrypt: jest.Mock;
+  };
 
   const dto: any = {
     firstName: 'Jane',
@@ -48,11 +55,19 @@ describe('CreateUserProvider', () => {
     };
     hashingProvider = { hashPassword: jest.fn(async () => 'hashed-password') };
     mailService = { WelcomeEmail: jest.fn(async () => undefined) };
+    cryptoProvider = {
+      isEnabled: jest.fn(() => false),
+      createDek: jest.fn(async () => ({ id: 'dek-1' })),
+      attachDekToUser: jest.fn(async () => undefined),
+      encrypt: jest.fn(async () => ({ ciphertext: 'env', dekId: 'dek-1' })),
+      decrypt: jest.fn(async () => 'plain'),
+    };
 
     provider = new CreateUserProvider(
       userRepository as any,
       hashingProvider as any,
       mailService as any,
+      cryptoProvider as any,
     );
   });
 
@@ -63,7 +78,10 @@ describe('CreateUserProvider', () => {
     expect(userRepository.create).toHaveBeenCalledWith({
       ...dto,
       password: 'hashed-password',
+      dataEncryptionKeyId: null,
     });
+    expect(cryptoProvider.createDek).not.toHaveBeenCalled();
+    expect(cryptoProvider.attachDekToUser).not.toHaveBeenCalled();
     expect(userRepository.save).toHaveBeenCalled();
     expect(mailService.WelcomeEmail).toHaveBeenCalled();
     expect(result).toEqual([
@@ -98,6 +116,21 @@ describe('CreateUserProvider', () => {
     await expect(provider.createUsers(dto)).rejects.toBeInstanceOf(
       RequestTimeoutException,
     );
+  });
+
+  it('provisions and links a DEK when envelope encryption is enabled (issue #631)', async () => {
+    cryptoProvider.isEnabled.mockReturnValue(true);
+    cryptoProvider.createDek.mockResolvedValueOnce({ id: 'dek-1' });
+    userRepository.save.mockResolvedValueOnce({ id: 1, email: dto.email });
+
+    const result = await provider.createUsers(dto);
+
+    expect(cryptoProvider.createDek).toHaveBeenCalled();
+    expect(userRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ dataEncryptionKeyId: 'dek-1' }),
+    );
+    expect(cryptoProvider.attachDekToUser).toHaveBeenCalledWith('dek-1', 1);
+    expect(result).toHaveLength(1);
   });
 
   it('still returns the user when sending the welcome email fails', async () => {
