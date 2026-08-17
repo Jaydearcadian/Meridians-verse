@@ -973,6 +973,56 @@ mod propchain_oracle {
             }
         }
 
+        /// Invoke `verify_zk_proof_data(proof_type, public_inputs, proof_data)`
+        /// on the configured ZK compliance contract.
+        ///
+        /// Returns `Ok(true)` only when the compliance contract confirms the
+        /// proof. Any error (contract unavailable, malformed payload, unverified
+        /// proof) is mapped to [`OracleError::ZkVerificationFailed`].
+        fn call_zk_verifier(
+            &self,
+            proof_type: ZkProofType,
+            public_inputs: Vec<[u8; 32]>,
+            proof_data: Vec<u8>,
+        ) -> Result<bool, OracleError> {
+            use ink::env::call::{build_call, ExecutionInput, Selector};
+
+            let zk_contract = self
+                .zk_compliance_contract
+                .ok_or(OracleError::ZkComplianceNotSet)?;
+
+            let result = build_call::<ink::env::DefaultEnvironment>()
+                .call(zk_contract)
+                .ref_time_limit(0)
+                .proof_size_limit(0)
+                .storage_deposit_limit(None)
+                .exec_input(
+                    ExecutionInput::new(Selector::new(ink::selector_bytes!(
+                        "verify_zk_proof_data"
+                    )))
+                    .push_arg(&proof_type)
+                    .push_arg(&public_inputs)
+                    .push_arg(&proof_data),
+                )
+                .returns::<Result<bool, ZkVerifyError>>()
+                .try_invoke();
+
+            match result {
+                Ok(Ok(Ok(valid))) => Ok(valid),
+                _ => Err(OracleError::ZkVerificationFailed),
+            }
+        }
+
+        /// Hash a statement into the single 32-byte public input expected by
+        /// the off-chain prover (BLAKE2b-256 of the SCALE-encoded statement).
+        fn bind_public_input(&self, statement: &[u8]) -> [u8; 32] {
+            use ink::env::hash::{Blake2x256, HashOutput};
+
+            let mut output = <Blake2x256 as HashOutput>::Type::default();
+            self.env().hash_bytes::<Blake2x256>(statement, &mut output);
+            output
+        }
+
         /// Deterministic fallback price used when an external oracle feed is
         /// unavailable.  Values are anchored to the same bases as the original
         /// mock implementations so existing tests continue to pass unchanged.
@@ -1904,6 +1954,103 @@ mod oracle_tests {
         assert!(oracle.pending_requests.get(&1).is_some());
         assert!(oracle.pending_requests.get(&2).is_some());
         assert!(oracle.pending_requests.get(&3).is_some());
+    }
+
+    // =========================================================================
+    // ZERO-KNOWLEDGE ATTESTATION TESTS
+    // =========================================================================
+
+    /// Only the admin may set the ZK compliance contract.
+    #[ink::test]
+    fn test_set_zk_compliance_contract_unauthorized_rejected() {
+        let mut oracle = setup_oracle();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.bob); // not admin
+
+        assert_eq!(
+            oracle.set_zk_compliance_contract(accounts.charlie),
+            Err(OracleError::Unauthorized),
+            "Non-admin must not set the ZK compliance contract"
+        );
+    }
+
+    /// Submitting a ZK attestation without a configured compliance contract
+    /// must fail explicitly.
+    #[ink::test]
+    fn test_submit_zk_valuation_without_contract_fails() {
+        let mut oracle = setup_oracle();
+
+        let attestation = ZkProofData {
+            proof_type: ZkProofType::PropertyOwnership,
+            status: ZkProofStatus::Verified,
+            public_inputs: vec![[0u8; 32]],
+            proof_data: vec![0u8; 128],
+            created_at: 0,
+            expires_at: u64::MAX,
+            verifier: AccountId::from([0x0; 32]),
+            metadata: vec![],
+        };
+
+        assert_eq!(
+            oracle.submit_zk_valuation(1, 500_000, 90, attestation),
+            Err(OracleError::ZkComplianceNotSet),
+            "ZK attestation without a compliance contract must fail"
+        );
+    }
+
+    /// The statement binding must match: a proof whose public input does not
+    /// commit to `(property_id, valuation)` is rejected locally.
+    #[ink::test]
+    fn test_submit_zk_valuation_binding_mismatch_rejected() {
+        let mut oracle = setup_oracle();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+
+        oracle
+            .set_zk_compliance_contract(accounts.bob)
+            .expect("admin set should succeed");
+
+        let attestation = ZkProofData {
+            proof_type: ZkProofType::PropertyOwnership,
+            status: ZkProofStatus::Verified,
+            public_inputs: vec![[0x11u8; 32]], // wrong binding
+            proof_data: vec![0u8; 128],
+            created_at: 0,
+            expires_at: u64::MAX,
+            verifier: AccountId::from([0x0; 32]),
+            metadata: vec![],
+        };
+
+        assert_eq!(
+            oracle.submit_zk_valuation(1, 500_000, 90, attestation),
+            Err(OracleError::InvalidZkProof),
+            "Mismatched statement binding must be rejected locally"
+        );
+    }
+
+    /// A valuation of zero is never accepted, even with a well-formed attestation.
+    #[ink::test]
+    fn test_submit_zk_valuation_zero_value_rejected() {
+        let mut oracle = setup_oracle();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+
+        oracle.set_zk_compliance_contract(accounts.bob).unwrap();
+
+        let attestation = ZkProofData {
+            proof_type: ZkProofType::PropertyOwnership,
+            status: ZkProofStatus::Verified,
+            public_inputs: vec![[0u8; 32]],
+            proof_data: vec![0u8; 128],
+            created_at: 0,
+            expires_at: u64::MAX,
+            verifier: AccountId::from([0x0; 32]),
+            metadata: vec![],
+        };
+
+        assert_eq!(
+            oracle.submit_zk_valuation(1, 0, 90, attestation),
+            Err(OracleError::InvalidValuation),
+            "Zero valuation must be rejected"
+        );
     }
 
     // =========================================================================

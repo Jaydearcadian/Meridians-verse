@@ -13,6 +13,31 @@ use ink::storage::Mapping;
 use ink::env::Environment;
 use propchain_traits::*;
 use ml_pipeline::*;
+use scale::Encode;
+
+// Zero-knowledge proof of model execution — compiled with the `zk` feature.
+#[cfg(feature = "zk")]
+use ark_bn254::{Bn254, Fr};
+#[cfg(feature = "zk")]
+use ark_ff::PrimeField;
+#[cfg(feature = "zk")]
+use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, VerifyingKey};
+#[cfg(feature = "zk")]
+use ark_serialize::CanonicalDeserialize;
+#[cfg(feature = "zk")]
+use ark_snark::SNARK;
+
+/// Deserialize a compressed Groth16 verification key (zk feature only).
+#[cfg(feature = "zk")]
+fn deserialize_vk(bytes: &[u8]) -> core::result::Result<VerifyingKey<Bn254>, ()> {
+    VerifyingKey::<Bn254>::deserialize_compressed(bytes).map_err(|_| ())
+}
+
+/// Deserialize a compressed Groth16 proof (zk feature only).
+#[cfg(feature = "zk")]
+fn deserialize_proof(bytes: &[u8]) -> core::result::Result<Proof<Bn254>, ()> {
+    Proof::<Bn254>::deserialize_compressed(bytes).map_err(|_| ())
+}
 
 /// AI-powered property valuation engine
 #[ink::contract]
