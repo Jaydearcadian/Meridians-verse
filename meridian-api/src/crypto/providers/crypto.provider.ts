@@ -180,6 +180,12 @@ export class CryptoProvider implements OnModuleInit {
       return payload;
     }
 
+    // Data envelopes must reference their DEK; wrapped-key envelopes (which
+    // share the same shape minus keyId) are handled by decryptWithKek only.
+    if (!envelope.keyId) {
+      throw new DecryptionFailedError('Envelope is missing its keyId');
+    }
+
     if (!this.isEnabled()) {
       throw new EncryptionKeyUnavailableError(
         'Cannot decrypt envelope: no KEK is configured',
@@ -312,12 +318,7 @@ export class CryptoProvider implements OnModuleInit {
    * KeyRotationService can validate incoming keys without a provider cycle.
    */
   static parseKekMaterial(base64: string): Buffer {
-    let raw: Buffer;
-    try {
-      raw = Buffer.from(base64, 'base64');
-    } catch {
-      raw = Buffer.alloc(0);
-    }
+    const raw = Buffer.from(base64, 'base64');
     if (raw.length !== CryptoProvider.KEK_BYTES) {
       throw new CryptoError(
         `KEK must be a base64-encoded ${CryptoProvider.KEK_BYTES}-byte key (got ${raw.length} bytes)`,
@@ -354,7 +355,7 @@ export class CryptoProvider implements OnModuleInit {
 
   private parseEnvelope(value: string): {
     v: number;
-    keyId: string;
+    keyId?: string;
     iv: string;
     tag: string;
     ct: string;
@@ -370,14 +371,13 @@ export class CryptoProvider implements OnModuleInit {
       if (
         parsed &&
         parsed.v === CryptoProvider.ENVELOPE_VERSION &&
-        typeof parsed.keyId === 'string' &&
         typeof parsed.iv === 'string' &&
         typeof parsed.tag === 'string' &&
         typeof parsed.ct === 'string'
       ) {
         return parsed as {
           v: number;
-          keyId: string;
+          keyId?: string;
           iv: string;
           tag: string;
           ct: string;

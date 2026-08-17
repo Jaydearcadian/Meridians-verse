@@ -26,7 +26,10 @@ function buildEnvironment(
       }
       return batch;
     }),
-    findOneBy: jest.fn(),
+    findOneBy: jest.fn(async ({ id }: { id: string }) => {
+      const match = deks.find((d) => d.id === id);
+      return match ? { ...match } : null;
+    }),
     create: jest.fn((e) => e),
     update: jest.fn(),
   } as unknown as jest.Mocked<Partial<Repository<DataEncryptionKey>>>;

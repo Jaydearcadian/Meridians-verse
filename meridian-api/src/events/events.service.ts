@@ -178,18 +178,27 @@ export class EventsService implements OnModuleInit {
         : 'no-secret';
 
     // Encrypt the secret at rest (issue #631). In transparent-fallback mode
-    // encrypt() returns the plaintext and dekId is null — the client still
-    // receives the secret in the registration response either way.
-    const { ciphertext, dekId } = await this.cryptoProvider.encrypt(secret);
+    // (no KEK) the secret keeps the legacy plaintext column so ciphertext
+    // columns never hold plaintext; production requires a KEK via env schema.
+    let storedSecret: string | null = null;
+    let encryptedData: string | null = null;
+    let dataEncryptionKeyId: string | null = null;
+    if (this.cryptoProvider.isEnabled()) {
+      const encrypted = await this.cryptoProvider.encrypt(secret);
+      encryptedData = encrypted.ciphertext;
+      dataEncryptionKeyId = encrypted.dekId;
+    } else {
+      storedSecret = secret;
+    }
 
     const webhook = this.webhookRepo.create({
       url: dto.url,
       contract: dto.contract || null,
       action: dto.action || null,
       address: dto.address || null,
-      secret: null,
-      encryptedData: ciphertext,
-      dataEncryptionKeyId: dekId,
+      secret: storedSecret,
+      encryptedData,
+      dataEncryptionKeyId,
     });
 
     const saved = await this.webhookRepo.save(webhook);

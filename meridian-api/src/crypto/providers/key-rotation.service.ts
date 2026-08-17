@@ -37,7 +37,7 @@ export class KeyRotationService {
     batchSize = 500,
   ): Promise<{ rewrapped: number; kekVersion: number }> {
     // Throws if the key material is not a valid 32-byte base64 key.
-    CryptoProvider.parseKekMaterial(newKekBase64);
+    const newKek = CryptoProvider.parseKekMaterial(newKekBase64);
 
     const deks = await this.dekRepository.find({
       order: { createdAt: 'ASC' },
@@ -48,10 +48,7 @@ export class KeyRotationService {
       const batch = deks.slice(i, i + batchSize);
       for (const dek of batch) {
         const rawDek = await this.cryptoProvider.unwrapDek(dek);
-        dek.wrappedKey = this.cryptoProvider.wrapWithKek(
-          rawDek,
-          CryptoProvider.parseKekMaterial(newKekBase64),
-        );
+        dek.wrappedKey = this.cryptoProvider.wrapWithKek(rawDek, newKek);
         dek.kekVersion = this.cryptoProvider.getActiveKekVersion() + 1;
       }
       await this.dekRepository.save(batch);
