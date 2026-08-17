@@ -57,4 +57,27 @@ export const envValidationSchema = Joi.object({
   UPLOAD_S3_REGION: Joi.string().optional().allow(''),
   UPLOAD_S3_ACCESS_KEY_ID: Joi.string().optional().allow(''),
   UPLOAD_S3_SECRET_ACCESS_KEY: Joi.string().optional().allow(''),
-});
+
+  // Envelope encryption (issue #631): the master Key Encryption Key (KEK)
+  // that wraps per-user Data Encryption Keys. Provide either the raw
+  // base64-encoded 32-byte key or a URL that returns { "key": "<base64>" }.
+  // ENCRYPTION_KEK_PREVIOUS_BASE64 is the decrypt-only fallback used during
+  // key rotation. Production boots require a KEK; development/test may omit
+  // it (CryptoProvider falls back to transparent plaintext mode).
+  ENCRYPTION_KEK_BASE64: Joi.string().optional().allow(''),
+  ENCRYPTION_KEK_PREVIOUS_BASE64: Joi.string().optional().allow(''),
+  ENCRYPTION_KEK_URL: Joi.string().uri().optional().allow(''),
+}).custom(
+  (value, helpers) => {
+    const hasKek =
+      Boolean(value.ENCRYPTION_KEK_BASE64) || Boolean(value.ENCRYPTION_KEK_URL);
+    if (value.NODE_ENV === 'production' && !hasKek) {
+      return helpers.error('any.custom', {
+        message:
+          'ENCRYPTION_KEK_BASE64 or ENCRYPTION_KEK_URL is required in production (envelope encryption, issue #631)',
+      });
+    }
+    return value;
+  },
+  'envelope-encryption-kek-required',
+);
