@@ -58,6 +58,18 @@ export class User {
   @Column('datetime', { nullable: true })
   emailVerificationExpires: Date | null;
 
+  // Envelope encryption (issue #631): id of this user's Data Encryption
+  // Key (DEK) in `data_encryption_keys`; `encryptedData` holds the JSON
+  // envelope(s) of reversibly-encrypted sensitive fields (e.g. the
+  // verification-token plaintext) encrypted under that DEK.
+  @Exclude()
+  @Column('uuid', { nullable: true })
+  dataEncryptionKeyId: string | null;
+
+  @Exclude()
+  @Column('text', { nullable: true })
+  encryptedData: string | null;
+
   // @Column({ default: true })
   // isActive: boolean;
 
