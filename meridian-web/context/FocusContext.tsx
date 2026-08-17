@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { useErrorToast } from '@/hooks/use-error-toast';
 
@@ -58,6 +58,15 @@ export async function recordSessionOnChain(duration: number, xp: number): Promis
 
 export function FocusProvider({ children }: { children: React.ReactNode }) {
   const { triggerErrorToast } = useErrorToast();
+  const isMountedRef = useRef(true);
+  const isSyncingRef = useRef(false);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // Basic stats
   const [xp, setXp] = useState<number>(0);
@@ -75,6 +84,7 @@ export function FocusProvider({ children }: { children: React.ReactNode }) {
 
   // Load state on mount (Client-side only)
   useEffect(() => {
+    let completionTimeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const storedXp = localStorage.getItem('focus_xp');
       const storedStreak = localStorage.getItem('focus_streak');
@@ -115,7 +125,7 @@ export function FocusProvider({ children }: { children: React.ReactNode }) {
           // session completed while offline/closed. Complete it now!
           localStorage.removeItem('focus_active_session');
           // We can call completeSession directly with the session details
-          setTimeout(() => {
+          completionTimeout = setTimeout(() => {
             handleCompleteSession(session.durationMinutes, session.startTime + total * 1000);
           }, 0);
         }
@@ -123,6 +133,9 @@ export function FocusProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       console.error('Failed to load focus states from localStorage:', e);
     }
+    return () => {
+      if (completionTimeout) clearTimeout(completionTimeout);
+    };
   }, []);
 
   // Timer interval countdown
@@ -149,28 +162,36 @@ export function FocusProvider({ children }: { children: React.ReactNode }) {
   const syncOfflineQueue = useCallback(async () => {
     if (offlineQueue.length === 0) return;
     if (typeof window !== 'undefined' && !navigator.onLine) return;
+    if (isSyncingRef.current) return;
 
+    isSyncingRef.current = true;
     setIsLoading(true);
     let successCount = 0;
     const remainingQueue = [...offlineQueue];
 
-    for (const session of offlineQueue) {
-      try {
-        await recordSessionOnChain(session.durationMinutes, session.xpEarned);
-        successCount++;
-        remainingQueue.shift(); // remove processed
-      } catch (err) {
-        // Stop processing on first error
-        break;
+    try {
+      for (const session of offlineQueue) {
+        try {
+          await recordSessionOnChain(session.durationMinutes, session.xpEarned);
+          successCount++;
+          remainingQueue.shift(); // remove processed
+        } catch {
+          // Stop processing on the first recoverable sync failure.
+          break;
+        }
       }
-    }
 
-    setOfflineQueue(remainingQueue);
-    localStorage.setItem('focus_offline_queue', JSON.stringify(remainingQueue));
-    setIsLoading(false);
+      if (isMountedRef.current) {
+        setOfflineQueue(remainingQueue);
+        localStorage.setItem('focus_offline_queue', JSON.stringify(remainingQueue));
 
-    if (successCount > 0) {
-      toast.success(`Successfully synced ${successCount} focus session(s) to Stellar chain!`);
+        if (successCount > 0) {
+          toast.success(`Successfully synced ${successCount} focus session(s) to Stellar chain!`);
+        }
+      }
+    } finally {
+      if (isMountedRef.current) setIsLoading(false);
+      isSyncingRef.current = false;
     }
   }, [offlineQueue]);
 
@@ -293,10 +314,12 @@ export function FocusProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(true);
     try {
       await recordSessionOnChain(duration, xpEarned);
-      toast.success(`Session recorded on-chain! Earned +${xpEarned} XP.`, {
-        description: `Streak: ${newStreak} days. Supercharge: ${superchargeTier}`,
-      });
-    } catch (err: any) {
+      if (isMountedRef.current) {
+        toast.success(`Session recorded on-chain! Earned +${xpEarned} XP.`, {
+          description: `Streak: ${newStreak} days. Supercharge: ${superchargeTier}`,
+        });
+      }
+    } catch (err: unknown) {
       // Offline/no-wallet queueing fallback
       const queuedSession: QueuedSession = {
         id: Math.random().toString(36).substring(2, 9),
@@ -305,19 +328,14 @@ export function FocusProvider({ children }: { children: React.ReactNode }) {
         timestamp: completionTime,
       };
       
-      const newQueue = [...offlineQueue, queuedSession];
-      setOfflineQueue(newQueue);
-      localStorage.setItem('focus_offline_queue', JSON.stringify(newQueue));
-
-      triggerErrorToast(
-        {
-          message: `Network offline. Queued session for sync. Optimistic XP (+${xpEarned}) applied!`,
-          code: 'TX_QUEUED',
-        },
-        'TX_QUEUED'
-      );
+      if (isMountedRef.current) {
+        const newQueue = [...offlineQueue, queuedSession];
+        setOfflineQueue(newQueue);
+        localStorage.setItem('focus_offline_queue', JSON.stringify(newQueue));
+        triggerErrorToast(err, { scope: 'focus-session' });
+      }
     } finally {
-      setIsLoading(false);
+      if (isMountedRef.current) setIsLoading(false);
     }
   };
 
