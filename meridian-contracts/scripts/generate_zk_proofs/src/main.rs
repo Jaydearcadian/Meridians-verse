@@ -27,13 +27,13 @@
 
 use ark_bn254::{Bn254, Fr};
 use ark_ff::{Field, PrimeField, UniformRand};
-use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
+use ark_groth16::{create_random_proof, Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
 use blake2::{Blake2b512, Digest};
 use rand::rngs::StdRng;
-use rand::{RngCore, SeedableRng};
+use rand::SeedableRng;
 use serde::Serialize;
 use sha2::Sha256;
 use std::fs;
@@ -143,8 +143,10 @@ fn main() {
     )
     .expect("setup failed");
 
-    let proof: Proof<Bn254> = Groth16::<Bn254>::create_random_proof(circuit, &pk, &mut rng)
-        .expect("proving failed");
+    // `create_random_proof` is a crate-root free function in ark-groth16 0.4
+    // (only `generate_random_parameters_with_reduction` is associated with
+    // `Groth16`).
+    let proof: Proof<Bn254> = create_random_proof(circuit, &pk, &mut rng).expect("proving failed");
 
     // Sanity-check the produced proof locally before writing artifacts.
     let vk = pk.vk;

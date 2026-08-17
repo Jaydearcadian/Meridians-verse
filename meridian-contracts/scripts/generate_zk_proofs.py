@@ -16,9 +16,8 @@ Example
     python scripts/generate_zk_proofs.py identity --age 25 --country 840
     python scripts/generate_zk_proofs.py financial --min-income 120000
     python scripts/generate_zk_proofs.py accredited
-    python scripts/generate_zk_proofs.py oracle --property-id 1 --valuation 500000
-    python scripts/generate_zk_proofs.py model --property-id 1 --model-id lin_v1 \
-        --predicted 512000 --feature-hash <hex>
+    python scripts/generate_zk_proofs.py oracle --oracle-property-id 1 --valuation 500000
+    python scripts/generate_zk_proofs.py model --model-id lin_v1 --predicted 512000
 """
 
 from __future__ import annotations
@@ -71,21 +70,31 @@ def statement_for(proof_type: str, args: argparse.Namespace) -> bytes:
     if proof_type == "property":
         # verify_property_ownership_zk(property_id: [u8;32], owner_public_key: [u8;32])
         pid = bytes.fromhex(args.property_id)
+        if args.owner_key is None:
+            raise SystemExit("--owner-key (32 bytes hex) is required for `property` proofs")
         key = bytes.fromhex(args.owner_key)
         if len(pid) != 32 or len(key) != 32:
             raise SystemExit("--property-id and --owner-key must each be 32 bytes (hex)")
         return pid + key
     if proof_type == "address":
         # verify_address_ownership_zk(address_hash: [u8;32])
+        if args.address_hash is None:
+            raise SystemExit("--address-hash (32 bytes hex) is required for `address` proofs")
         return bytes.fromhex(args.address_hash)
     if proof_type == "confidential":
         # submit_confidential_transaction(transaction_type: u8, amount: u128, asset_type: u8)
         return scale_u8(args.tx_type) + scale_u128(args.amount) + scale_u8(args.asset_type)
     if proof_type == "oracle":
         # submit_zk_valuation(property_id: u64, valuation: u128)
-        return scale_u64(args.property_id) + scale_u128(args.valuation)
+        return scale_u64(args.oracle_property_id) + scale_u128(args.valuation)
     if proof_type == "model":
         # verify_model_execution_zk: H(commitment || feature_hash || H(predicted_value))
+        # Deterministic defaults derived from the model id keep the tool usable
+        # out of the box; override to match a deployed model commitment.
+        if args.commitment is None:
+            args.commitment = blake2b_256(f"weights:{args.model_id}".encode()).hex()
+        if args.feature_hash is None:
+            args.feature_hash = blake2b_256(f"features:{args.model_id}".encode()).hex()
         commitment = bytes.fromhex(args.commitment)
         feature_hash = bytes.fromhex(args.feature_hash)
         if len(commitment) != 32 or len(feature_hash) != 32:
@@ -145,14 +154,15 @@ def main() -> int:
     # financial
     parser.add_argument("--min-income", type=int, default=120_000)
     # property / address
-    parser.add_argument("--property-id", default=None)
+    parser.add_argument("--property-id", default="01")  # 32-byte hex for `property`
     parser.add_argument("--owner-key", default=None)
     parser.add_argument("--address-hash", default=None)
     # confidential
     parser.add_argument("--tx-type", type=int, default=0)
     parser.add_argument("--amount", type=int, default=100_000)
     parser.add_argument("--asset-type", type=int, default=0)
-    # oracle
+    # oracle (property id is a u64 here, default 1)
+    parser.add_argument("--oracle-property-id", type=int, default=1)
     parser.add_argument("--valuation", type=int, default=500_000)
     # model
     parser.add_argument("--model-id", default="linear_reg_v1")
