@@ -2,6 +2,7 @@ import {
   forwardRef,
   Inject,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { RefreshTokenDto } from '../dto/refresh-token-dto';
@@ -14,9 +15,12 @@ import { UserService } from 'src/users/providers/user.services';
 import { GenerateTokenProvider } from './token.provider';
 import { RefreshToken } from '../entities/refresh-token.entity';
 import { HashingProvider } from './hashing';
+import { CryptoProvider, constantTimeEqual } from 'src/crypto/providers/crypto.provider';
 
 @Injectable()
 export class RefreshTokenProvider {
+  private readonly logger = new Logger(RefreshTokenProvider.name);
+
   constructor(
     @Inject(forwardRef(() => UserService))
     private readonly userService: UserService,
@@ -34,6 +38,11 @@ export class RefreshTokenProvider {
 
     // injecting generatetokenprovider
     private readonly generateTokenProvider: GenerateTokenProvider,
+
+    // Envelope encryption (issue #631): stores a reversible, encrypted copy
+    // of each refresh token (under the user's DEK) so sessions can be
+    // audited/rotated without re-hashing.
+    private readonly cryptoProvider: CryptoProvider,
   ) {}
 
   public async refreshToken(
@@ -73,9 +82,9 @@ export class RefreshTokenProvider {
         );
       }
 
-      const isValid = await this.hashingProvider.comparePassword(
+      const isValid = await this.isValidRefreshToken(
         refreshTokendto.refreshToken,
-        storedToken.tokenHash,
+        storedToken,
       );
 
       if (!isValid) {
@@ -97,6 +106,7 @@ export class RefreshTokenProvider {
         expiresAt: new Date(Date.now() + this.jwtconfiguration.Rttl * 1000),
         revokedAt: null,
         userAgent: userAgent ?? null,
+        ...(await this.encryptRefreshToken(tokens.refresh_token, user)),
       });
 
       return {
@@ -151,5 +161,52 @@ export class RefreshTokenProvider {
     );
 
     return { message: 'All sessions revoked successfully' };
+  }
+
+  /**
+   * Compare a raw refresh token against a stored row. Prefers the
+   * envelope-encrypted copy (issue #631); falls back to the legacy bcrypt
+   * hash so pre-migration rows keep validating.
+   */
+  private async isValidRefreshToken(
+    rawToken: string,
+    stored: RefreshToken,
+  ): Promise<boolean> {
+    if (stored.encryptedData) {
+      try {
+        const decrypted = await this.cryptoProvider.decrypt(
+          stored.encryptedData,
+        );
+        if (constantTimeEqual(decrypted, rawToken)) {
+          return true;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to decrypt refresh token ${stored.jti}: ${
+            error instanceof Error ? error.message : error
+          }`,
+        );
+      }
+    }
+
+    if (stored.tokenHash) {
+      return this.hashingProvider.comparePassword(rawToken, stored.tokenHash);
+    }
+
+    return false;
+  }
+
+  /** Encrypt a refresh token under the owner user's DEK (issue #631). */
+  private async encryptRefreshToken(
+    rawToken: string,
+    user: { id: number; dataEncryptionKeyId?: string | null },
+  ): Promise<{ encryptedData: string | null; dataEncryptionKeyId: string | null }> {
+    if (!this.cryptoProvider.isEnabled()) {
+      return { encryptedData: null, dataEncryptionKeyId: null };
+    }
+    const { ciphertext, dekId } = await this.cryptoProvider.encrypt(rawToken, {
+      dekId: user.dataEncryptionKeyId ?? undefined,
+    });
+    return { encryptedData: ciphertext, dataEncryptionKeyId: dekId };
   }
 }
