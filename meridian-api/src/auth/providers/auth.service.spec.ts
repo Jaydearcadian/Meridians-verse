@@ -2,9 +2,7 @@ jest.mock('src/users/user.entity', () => ({ User: class User {} }), {
   virtual: true,
 });
 
-import {
-  UnauthorizedException,
-} from '@nestjs/common';
+import { UnauthorizedException } from '@nestjs/common';
 import { AuthService } from './auth.service';
 
 describe('AuthService - email verification (issue #435)', () => {

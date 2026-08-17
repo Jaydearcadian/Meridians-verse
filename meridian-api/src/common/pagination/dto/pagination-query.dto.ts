@@ -19,4 +19,12 @@ export class PaginationQueryDto {
   @IsOptional()
   @IsPositive()
   page?: number = 1;
+
+  @ApiPropertyOptional({
+    description: 'Cursor for keyset pagination (ID of the last item)',
+    example: 10,
+  })
+  @IsOptional()
+  @IsPositive()
+  cursor?: number;
 }

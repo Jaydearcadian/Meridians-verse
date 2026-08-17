@@ -1,18 +1,29 @@
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(feature = "std"), no_std, no_main)]
 #![allow(unexpected_cfgs)]
+#![allow(clippy::arithmetic_side_effects)]
+#![allow(clippy::cast_possible_truncation)]
 
 //! Property token contract for ownership, compliance, and bridge-enabled operations.
 
 
+use ink::prelude::{
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 use ink::prelude::string::String;
 use ink::storage::Mapping;
 use propchain_traits::*;
-#[cfg(not(feature = "std"))]
-use scale_info::prelude::vec::Vec;
 
 #[ink::contract]
 mod property_token {
     use super::*;
+
+    const MAX_ERROR_LOG: u64 = 50;
+    const ERROR_WINDOW_DURATION_MS: u64 = 3_600_000;
+    const DEFAULT_ERROR_LIMIT: u64 = 10;
+    const CODE_HASH_UPGRADE_DELAY_MS: u64 = 48 * 60 * 60 * 1000;
 
     /// Error types for the property token contract
     #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
@@ -46,6 +57,11 @@ mod property_token {
         ProposalClosed,
         AskNotFound,
         InconsistentState,
+        RateLimited,
+        InvalidParameters,
+        GovernanceNotSet,
+        UpgradeNotProposed,
+        UpgradeTimelockActive,
     }
 
     /// Property Token contract that maintains compatibility with ERC-721 and ERC-1155
@@ -89,14 +105,20 @@ mod property_token {
 
         // Error logging and monitoring
         error_counts: Mapping<(AccountId, String), u64>,
-        error_rates: Mapping<String, (u64, u64)>, // (count, window_start)
+        error_rates: Mapping<AccountId, ErrorRateState>,
         recent_errors: Mapping<u64, ErrorLogEntry>,
         error_log_counter: u64,
+        account_error_totals: Mapping<AccountId, u64>,
+        error_limit: u64,
+        last_error_hash: Hash,
 
         total_shares: Mapping<TokenId, u128>,
         dividends_per_share: Mapping<TokenId, u128>,
+        // Legacy credit mapping retained for compatibility but no longer used.
         dividend_credit: Mapping<(AccountId, TokenId), u128>,
         dividend_balance: Mapping<(AccountId, TokenId), u128>,
+        // New checkpoint storing the last seen dividends_per_share per holder.
+        dividend_checkpoint: Mapping<(AccountId, TokenId), u128>,
         proposal_counter: Mapping<TokenId, u64>,
         proposals: Mapping<(TokenId, u64), Proposal>,
         votes_cast: Mapping<(TokenId, u64, AccountId), bool>,
@@ -106,6 +128,10 @@ mod property_token {
         compliance_registry: Option<AccountId>,
         fee_manager: Option<AccountId>,
         tax_records: Mapping<(AccountId, TokenId), TaxRecord>,
+        governance: Option<AccountId>,
+        pending_code_hash: Option<PendingCodeHash>,
+        code_hash_history: Mapping<u64, CodeHashChange>,
+        code_hash_history_count: u64,
 
         // Gas estimation: per-chain overhead and cross-contract buffer (issue #461)
         chain_gas_overhead: Mapping<ChainId, u64>,
@@ -114,6 +140,234 @@ mod property_token {
 
     // Domain types are extracted to keep this file focused on contract behavior.
     include!("types.rs");
+
+    // Events for tracking property token operations
+    #[ink(event)]
+    pub struct Transfer {
+        #[ink(topic)]
+        pub from: Option<AccountId>,
+        #[ink(topic)]
+        pub to: Option<AccountId>,
+        #[ink(topic)]
+        pub id: TokenId,
+    }
+
+    #[ink(event)]
+    pub struct Approval {
+        #[ink(topic)]
+        pub owner: AccountId,
+        #[ink(topic)]
+        pub spender: AccountId,
+        #[ink(topic)]
+        pub id: TokenId,
+    }
+
+    #[ink(event)]
+    pub struct ApprovalForAll {
+        #[ink(topic)]
+        pub owner: AccountId,
+        #[ink(topic)]
+        pub operator: AccountId,
+        pub approved: bool,
+    }
+
+    #[ink(event)]
+    pub struct PropertyTokenMinted {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub property_id: u64,
+        #[ink(topic)]
+        pub owner: AccountId,
+    }
+
+    #[ink(event)]
+    pub struct LegalDocumentAttached {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub document_hash: Hash,
+        #[ink(topic)]
+        pub document_type: String,
+    }
+
+    #[ink(event)]
+    pub struct ComplianceVerified {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub verified: bool,
+        #[ink(topic)]
+        pub verifier: AccountId,
+    }
+
+    #[ink(event)]
+    pub struct TokenBridged {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub destination_chain: ChainId,
+        #[ink(topic)]
+        pub recipient: AccountId,
+        pub bridge_request_id: u64,
+    }
+
+    #[ink(event)]
+    pub struct BridgeRequestCreated {
+        #[ink(topic)]
+        pub request_id: u64,
+        #[ink(topic)]
+        pub token_id: TokenId,
+        // Chain IDs stay in the payload; ink! allows at most 3 indexed topics
+        // (plus the event signature) so keep indexing on request/token/requester.
+        pub source_chain: ChainId,
+        pub destination_chain: ChainId,
+        #[ink(topic)]
+        pub requester: AccountId,
+    }
+
+    #[ink(event)]
+    pub struct BridgeRequestExpired {
+        #[ink(topic)]
+        pub request_id: u64,
+        #[ink(topic)]
+        pub token_id: TokenId,
+        pub expires_at: u64,
+    }
+
+    #[ink(event)]
+    pub struct BridgeRequestSigned {
+        #[ink(topic)]
+        pub request_id: u64,
+        #[ink(topic)]
+        pub signer: AccountId,
+        pub signatures_collected: u8,
+        pub signatures_required: u8,
+    }
+
+    #[ink(event)]
+    pub struct BridgeExecuted {
+        #[ink(topic)]
+        pub request_id: u64,
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub transaction_hash: Hash,
+    }
+
+    #[ink(event)]
+    pub struct BridgeFailed {
+        #[ink(topic)]
+        pub request_id: u64,
+        #[ink(topic)]
+        pub token_id: TokenId,
+        pub error: String,
+    }
+
+    #[ink(event)]
+    pub struct BridgeRecovered {
+        #[ink(topic)]
+        pub request_id: u64,
+        #[ink(topic)]
+        pub recovery_action: RecoveryAction,
+    }
+
+    #[ink(event)]
+    pub struct SharesIssued {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub to: AccountId,
+        pub amount: u128,
+    }
+
+    #[ink(event)]
+    pub struct SharesRedeemed {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub from: AccountId,
+        pub amount: u128,
+    }
+
+    #[ink(event)]
+    pub struct DividendsDeposited {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        pub amount: u128,
+        pub per_share: u128,
+    }
+
+    #[ink(event)]
+    pub struct DividendsWithdrawn {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub account: AccountId,
+        pub amount: u128,
+    }
+
+    #[ink(event)]
+    pub struct ProposalCreated {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub proposal_id: u64,
+        pub quorum: u128,
+    }
+
+    #[ink(event)]
+    pub struct Voted {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub proposal_id: u64,
+        #[ink(topic)]
+        pub voter: AccountId,
+        pub support: bool,
+        pub weight: u128,
+    }
+
+    #[ink(event)]
+    pub struct ProposalExecuted {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub proposal_id: u64,
+        pub passed: bool,
+    }
+
+    #[ink(event)]
+    pub struct AskPlaced {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub seller: AccountId,
+        pub price_per_share: u128,
+        pub amount: u128,
+    }
+
+    #[ink(event)]
+    pub struct AskCancelled {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub seller: AccountId,
+        pub escrowed_amount: u128,
+    }
+
+    #[ink(event)]
+    pub struct SharesPurchased {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub seller: AccountId,
+        #[ink(topic)]
+        pub buyer: AccountId,
+        pub amount: u128,
+        pub price_per_share: u128,
+    }
+
 
     impl PropertyToken {
         /// Creates a new PropertyToken contract
@@ -172,11 +426,15 @@ mod property_token {
                 error_rates: Mapping::default(),
                 recent_errors: Mapping::default(),
                 error_log_counter: 0,
+                account_error_totals: Mapping::default(),
+                error_limit: DEFAULT_ERROR_LIMIT,
+                last_error_hash: Hash::from([0u8; 32]),
 
                 total_shares: Mapping::default(),
                 dividends_per_share: Mapping::default(),
                 dividend_credit: Mapping::default(),
                 dividend_balance: Mapping::default(),
+                dividend_checkpoint: Mapping::default(),
                 proposal_counter: Mapping::default(),
                 proposals: Mapping::default(),
                 votes_cast: Mapping::default(),
@@ -186,6 +444,10 @@ mod property_token {
                 compliance_registry: None,
                 fee_manager: None,
                 tax_records: Mapping::default(),
+                governance: None,
+                pending_code_hash: None,
+                code_hash_history: Mapping::default(),
+                code_hash_history_count: 0,
 
                 chain_gas_overhead: Mapping::default(),
                 cross_contract_gas_buffer_pct: 20,
@@ -193,9 +455,25 @@ mod property_token {
         }
 
         /// Ensure the account is not the zero address.
-        fn ensure_non_zero_account(account: &AccountId) -> Result<(), Error> {
+        fn ensure_non_zero_account(&self, account: &AccountId) -> Result<(), Error> {
             if *account == AccountId::from([0x0; 32]) {
                 return Err(Error::InvalidRequest);
+            }
+            Ok(())
+        }
+
+        /// Saturating mul/div helper for dividend and share math.
+        fn safe_mul_div(&self, a: u128, b: u128, denom: u128) -> u128 {
+            if denom == 0 {
+                return 0;
+            }
+            a.saturating_mul(b) / denom
+        }
+
+        /// Require the caller to be the token admin for privileged operations.
+        fn ensure_admin(&self) -> Result<(), Error> {
+            if self.env().caller() != self.admin {
+                return Err(Error::Unauthorized);
             }
             Ok(())
         }
@@ -203,7 +481,8 @@ mod property_token {
         /// ERC-721: Returns the balance of tokens owned by an account
         #[ink(message)]
         pub fn balance_of(&self, owner: AccountId) -> u32 {
-            self.ensure_non_zero_account(&owner).unwrap_or_else(|_| panic!("Zero address not allowed"));
+            self.ensure_non_zero_account(&owner)
+                .unwrap_or_else(|_| panic!("Zero address not allowed"));
             self.owner_token_count.get(owner).unwrap_or(0)
         }
 
@@ -221,6 +500,7 @@ mod property_token {
             to: AccountId,
             token_id: TokenId,
         ) -> Result<(), Error> {
+            self.ensure_not_paused()?;
             let caller = self.env().caller();
 
             // Collect fee for transfer
@@ -230,21 +510,22 @@ mod property_token {
             self.ensure_non_zero_account(&to)?;
 
             // Check if caller is authorized to transfer
-            let token_owner = self.token_owner.get(token_id).ok_or_else(|| {
-                let caller = self.env().caller();
-                self.log_error(
-                    caller,
-                    "TOKEN_NOT_FOUND".to_string(),
-                    format!("Token ID {} does not exist", token_id),
-                    vec![
-                        ("token_id".to_string(), token_id.to_string()),
-                        ("operation".to_string(), "transfer_from".to_string()),
-                    ],
-                );
-                Error::TokenNotFound
-            })?;
+            let token_owner = match self.token_owner.get(token_id) {
+                Some(owner) => owner,
+                None => {
+                    self.log_error(
+                        caller,
+                        "TOKEN_NOT_FOUND".to_string(),
+                        format!("Token ID {} does not exist", token_id),
+                        vec![
+                            ("token_id".to_string(), token_id.to_string()),
+                            ("operation".to_string(), "transfer_from".to_string()),
+                        ],
+                    )?;
+                    return Err(Error::TokenNotFound);
+                }
+            };
             if token_owner != from {
-                let caller = self.env().caller();
                 self.log_error(
                     caller,
                     "UNAUTHORIZED".to_string(),
@@ -254,7 +535,7 @@ mod property_token {
                         ("caller".to_string(), format!("{:?}", caller)),
                         ("owner".to_string(), format!("{:?}", token_owner)),
                     ],
-                );
+                )?;
                 return Err(Error::Unauthorized);
             }
 
@@ -293,18 +574,21 @@ mod property_token {
         #[ink(message)]
         pub fn approve(&mut self, to: AccountId, token_id: TokenId) -> Result<(), Error> {
             let caller = self.env().caller();
-            let token_owner = self.token_owner.get(token_id).ok_or_else(|| {
-                self.log_error(
-                    caller,
-                    "TOKEN_NOT_FOUND".to_string(),
-                    format!("Token ID {} does not exist", token_id),
-                    vec![
-                        ("token_id".to_string(), token_id.to_string()),
-                        ("operation".to_string(), "approve".to_string()),
-                    ],
-                );
-                Error::TokenNotFound
-            })?;
+            let token_owner = match self.token_owner.get(token_id) {
+                Some(owner) => owner,
+                None => {
+                    self.log_error(
+                        caller,
+                        "TOKEN_NOT_FOUND".to_string(),
+                        format!("Token ID {} does not exist", token_id),
+                        vec![
+                            ("token_id".to_string(), token_id.to_string()),
+                            ("operation".to_string(), "approve".to_string()),
+                        ],
+                    )?;
+                    return Err(Error::TokenNotFound);
+                }
+            };
 
             if token_owner != caller && !self.is_approved_for_all(token_owner, caller) {
                 self.log_error(
@@ -316,7 +600,7 @@ mod property_token {
                         ("caller".to_string(), format!("{:?}", caller)),
                         ("owner".to_string(), format!("{:?}", token_owner)),
                     ],
-                );
+                )?;
                 return Err(Error::Unauthorized);
             }
 
@@ -508,18 +792,106 @@ mod property_token {
             Ok(())
         }
 
-        /// Upgrades the contract code to the provided `code_hash`.
-        /// Only the admin can perform this operation.
+        /// Configure the external governance contract that authorizes code upgrades.
         #[ink(message)]
-        pub fn set_code_hash(&mut self, code_hash: Hash) -> Result<(), Error> {
-            let caller = self.env().caller();
-            if caller != self.admin {
-                return Err(Error::Unauthorized);
+        pub fn set_governance(&mut self, governance: AccountId) -> Result<(), Error> {
+            self.ensure_admin()?;
+            Self::ensure_non_zero_account(&governance)?;
+            self.governance = Some(governance);
+            Ok(())
+        }
+
+        /// Return the configured governance contract address, if any.
+        #[ink(message)]
+        pub fn governance(&self) -> Option<AccountId> {
+            self.governance
+        }
+
+        /// Deprecated direct upgrade entry point. Immediate upgrades are disabled.
+        #[ink(message)]
+        pub fn set_code_hash(&mut self, _code_hash: Hash) -> Result<(), Error> {
+            Err(Error::Unauthorized)
+        }
+
+        /// Propose a governance-approved code hash upgrade after the timelock expires.
+        #[ink(message)]
+        pub fn propose_code_hash(&mut self, code_hash: Hash) -> Result<(), Error> {
+            self.ensure_governance()?;
+            let now = self.env().block_timestamp();
+            let executable_at = now.saturating_add(CODE_HASH_UPGRADE_DELAY_MS);
+            self.pending_code_hash = Some(PendingCodeHash {
+                code_hash,
+                proposed_at: now,
+                executable_at,
+                proposer: self.env().caller(),
+            });
+            self.bridge_config.emergency_pause = true;
+            self.env().emit_event(CodeHashProposed {
+                code_hash,
+                executable_at,
+                proposer: self.env().caller(),
+            });
+            Ok(())
+        }
+
+        /// Commit the pending code hash upgrade once the timelock has elapsed.
+        #[ink(message)]
+        pub fn commit_code_hash(&mut self) -> Result<(), Error> {
+            self.ensure_governance()?;
+            let pending = self
+                .pending_code_hash
+                .clone()
+                .ok_or(Error::UpgradeNotProposed)?;
+            let now = self.env().block_timestamp();
+            if now < pending.executable_at {
+                return Err(Error::UpgradeTimelockActive);
             }
             self.env()
-                .set_code_hash(&code_hash)
+                .set_code_hash(&pending.code_hash)
                 .map_err(|_| Error::InvalidRequest)?;
+            let index = self.code_hash_history_count;
+            self.code_hash_history.insert(
+                index,
+                &CodeHashChange {
+                    code_hash: pending.code_hash,
+                    proposed_at: pending.proposed_at,
+                    committed_at: now,
+                    proposer: pending.proposer,
+                    committer: self.env().caller(),
+                },
+            );
+            self.code_hash_history_count = index.saturating_add(1);
+            self.pending_code_hash = None;
+            self.env().emit_event(CodeHashCommitted {
+                code_hash: pending.code_hash,
+                committed_at: now,
+                committer: self.env().caller(),
+            });
             Ok(())
+        }
+
+        /// Return the active pending code hash proposal, if any.
+        #[ink(message)]
+        pub fn pending_code_hash(&self) -> Option<PendingCodeHash> {
+            self.pending_code_hash.clone()
+        }
+
+        /// Return a committed code hash history entry by index.
+        #[ink(message)]
+        pub fn code_hash_history(&self, index: u64) -> Option<CodeHashChange> {
+            self.code_hash_history.get(index)
+        }
+
+        /// Return the number of committed code hash upgrades.
+        #[ink(message)]
+        pub fn code_hash_history_count(&self) -> u64 {
+            self.code_hash_history_count
+        }
+
+        /// Return the fixed upgrade timelock delay in milliseconds.
+        #[ink(message)]
+        pub fn code_hash_upgrade_delay(&self) -> u64 {
+            CODE_HASH_UPGRADE_DELAY_MS
         }
 
         /// Return the total fractional shares issued for a property token.
@@ -607,6 +979,7 @@ mod property_token {
             token_id: TokenId,
             amount: u128,
         ) -> Result<(), Error> {
+            self.ensure_not_paused()?;
             if amount == 0 {
                 return Err(Error::InvalidAmount);
             }
@@ -642,8 +1015,10 @@ mod property_token {
             if ts == 0 {
                 return Err(Error::InvalidRequest);
             }
+
+            // Use safe multiplication to avoid overflow on large deposits.
             let scaling: u128 = 1_000_000_000_000;
-            let add = value.saturating_mul(scaling) / ts;
+            let add = self.safe_mul_div(value, scaling, ts);
             let cur = self.dividends_per_share.get(token_id).unwrap_or(0);
             let new = cur.saturating_add(add);
             self.dividends_per_share.insert(token_id, &new);
@@ -802,6 +1177,7 @@ mod property_token {
             price_per_share: u128,
             amount: u128,
         ) -> Result<(), Error> {
+            self.ensure_not_paused()?;
             if price_per_share == 0 || amount == 0 {
                 return Err(Error::InvalidAmount);
             }
@@ -849,7 +1225,11 @@ mod property_token {
                 .insert((seller, token_id), &(bal.saturating_add(ask.amount)));
             self.escrowed_shares.insert((token_id, seller), &0u128);
             self.asks.remove((token_id, seller));
-            self.env().emit_event(AskCancelled { token_id, seller, escrowed_amount: esc });
+            self.env().emit_event(AskCancelled {
+                token_id,
+                seller,
+                escrowed_amount: esc,
+            });
             Ok(())
         }
 
@@ -861,6 +1241,7 @@ mod property_token {
             seller: AccountId,
             amount: u128,
         ) -> Result<(), Error> {
+            self.ensure_not_paused()?;
             if amount == 0 {
                 return Err(Error::InvalidAmount);
             }
@@ -976,18 +1357,30 @@ mod property_token {
             token_id: TokenId,
         ) -> Result<(), Error> {
             let scaling: u128 = 1_000_000_000_000;
-            let dps = self.dividends_per_share.get(token_id).unwrap_or(0);
-            let credited = self.dividend_credit.get((account, token_id)).unwrap_or(0);
-            if dps > credited {
+            let current_dps = self.dividends_per_share.get(token_id).unwrap_or(0);
+            // Retrieve the last checkpoint for this holder.
+            let checkpoint = self
+                .dividend_checkpoint
+                .get((account, token_id))
+                .unwrap_or(0);
+            if current_dps > checkpoint {
                 let bal = self.balances.get((account, token_id)).unwrap_or(0);
-                let mut owed = self.dividend_balance.get((account, token_id)).unwrap_or(0);
-                let delta = dps.saturating_sub(credited);
-                let add = bal.saturating_mul(delta) / scaling;
-                owed = owed.saturating_add(add);
+                let delta = current_dps.saturating_sub(checkpoint);
+                // Compute additional credit safely.
+                let add = self.safe_mul_div(bal, delta, scaling);
+                let owed = self
+                    .dividend_balance
+                    .get((account, token_id))
+                    .unwrap_or(0)
+                    .saturating_add(add);
                 self.dividend_balance.insert((account, token_id), &owed);
-                self.dividend_credit.insert((account, token_id), &dps);
-            } else if credited == 0 && dps > 0 {
-                self.dividend_credit.insert((account, token_id), &dps);
+                // Update the checkpoint to the latest per‑share value.
+                self.dividend_checkpoint
+                    .insert((account, token_id), &current_dps);
+            } else if checkpoint == 0 && current_dps > 0 {
+                // First time the holder sees any dividends.
+                self.dividend_checkpoint
+                    .insert((account, token_id), &current_dps);
             }
             Ok(())
         }
@@ -1034,8 +1427,8 @@ mod property_token {
                 to: caller,
                 timestamp: self.env().block_timestamp(),
                 transaction_hash: {
-                    use scale::Encode;
                     use ink::env::hash::{Blake2x256, CryptoHash};
+                    use scale::Encode;
                     let data = (&caller, token_id);
                     let encoded = data.encode();
                     let mut hash_bytes = [0u8; 32];
@@ -1290,7 +1683,10 @@ mod property_token {
             self.bridge_request_counter += 1;
             let request_id = self.bridge_request_counter;
             let current_block = self.env().block_number();
-            let _expires_at = timeout_blocks.map(|blocks| u64::from(current_block) + blocks);
+            // Always set an expiry — fall back to bridge_config.default_timeout_blocks
+            // so requests cannot live forever when callers pass None.
+            let timeout = timeout_blocks.unwrap_or(self.bridge_config.default_timeout_blocks);
+            let expires_at = Some(u64::from(current_block).saturating_add(timeout));
 
             let property_info = self
                 .token_properties
@@ -1307,7 +1703,8 @@ mod property_token {
                 required_signatures,
                 signatures: Vec::new(),
                 created_at: u64::from(current_block),
-                expires_at: timeout_blocks.map(|blocks| u64::from(current_block) + blocks),
+                expires_at,
+                locked_at_block: None,
                 status: BridgeOperationStatus::Pending,
                 metadata: property_info.metadata.clone(),
             };
@@ -1341,23 +1738,23 @@ mod property_token {
                 .get(request_id)
                 .ok_or(Error::InvalidRequest)?;
 
-            // Check if request has expired
-            if let Some(expires_at) = request.expires_at {
-                if u64::from(self.env().block_number()) > expires_at {
-                    request.status = BridgeOperationStatus::Expired;
-                    self.bridge_requests.insert(request_id, &request);
-                    self.token_pending_requests.remove(request.token_id);
-                    return Err(Error::RequestExpired);
-                }
+            // Reject (and free the token) if the request timed out
+            self.expire_bridge_request_if_needed(request_id, &mut request)?;
+
+            // Reject non-pending requests (already locked / failed / expired / completed)
+            if request.status != BridgeOperationStatus::Pending {
+                return Err(Error::InvalidRequest);
             }
 
-            // Check if already signed
+            // Dedupe: one vote per operator per request
             if request.signatures.contains(&caller) {
                 return Err(Error::AlreadySigned);
             }
 
             // Add signature
             request.signatures.push(caller);
+
+            let valid_sigs = self.count_valid_operator_signatures(&request);
 
             // Update status based on approval and signatures collected
             if !approve {
@@ -1368,8 +1765,9 @@ mod property_token {
                     token_id: request.token_id,
                     error: String::from("Request rejected by operator"),
                 });
-            } else if request.signatures.len() >= request.required_signatures as usize {
+            } else if valid_sigs >= request.required_signatures {
                 request.status = BridgeOperationStatus::Locked;
+                request.locked_at_block = Some(u64::from(self.env().block_number()));
 
                 // Lock the token for bridging
                 let token_owner = self
@@ -1387,7 +1785,7 @@ mod property_token {
             self.env().emit_event(BridgeRequestSigned {
                 request_id,
                 signer: caller,
-                signatures_collected: request.signatures.len() as u8,
+                signatures_collected: valid_sigs,
                 signatures_required: request.required_signatures,
             });
 
@@ -1409,13 +1807,16 @@ mod property_token {
                 .get(request_id)
                 .ok_or(Error::InvalidRequest)?;
 
+            // Timed-out requests must not complete — unlock + free pending slot
+            self.expire_bridge_request_if_needed(request_id, &mut request)?;
+
             // Check if request is ready for execution
             if request.status != BridgeOperationStatus::Locked {
                 return Err(Error::InvalidRequest);
             }
 
-            // Check if enough signatures are collected
-            if request.signatures.len() < request.required_signatures as usize {
+            // Quorum over the *current* operator set only
+            if self.count_valid_operator_signatures(&request) < request.required_signatures {
                 return Err(Error::InsufficientSignatures);
             }
 
@@ -1525,8 +1926,8 @@ mod property_token {
                 to: recipient,
                 timestamp: self.env().block_timestamp(),
                 transaction_hash: {
-                    use scale::Encode;
                     use ink::env::hash::{Blake2x256, CryptoHash};
+                    use scale::Encode;
                     let data = (&recipient, new_token_id);
                     let encoded = data.encode();
                     let mut hash_bytes = [0u8; 32];
@@ -1670,7 +2071,8 @@ mod property_token {
                     request.signatures.clear();
                     // Re-register in the O(1) pending lookup so duplicate-request
                     // guard in initiate_bridge_multisig remains accurate.
-                    self.token_pending_requests.insert(request.token_id, &request_id);
+                    self.token_pending_requests
+                        .insert(request.token_id, &request_id);
                 }
                 RecoveryAction::CancelBridge => {
                     // Mark as cancelled and unlock token
@@ -1739,6 +2141,7 @@ mod property_token {
         #[ink(message)]
         pub fn monitor_bridge_status(&self, request_id: u64) -> Option<BridgeMonitoringInfo> {
             let request = self.bridge_requests.get(request_id)?;
+            let signatures_collected = self.count_valid_operator_signatures(&request);
 
             Some(BridgeMonitoringInfo {
                 bridge_request_id: request.request_id,
@@ -1748,7 +2151,7 @@ mod property_token {
                 status: request.status,
                 created_at: request.created_at,
                 expires_at: request.expires_at,
-                signatures_collected: request.signatures.len() as u8,
+                signatures_collected,
                 signatures_required: request.required_signatures,
                 error_message: None,
             })
@@ -1824,6 +2227,16 @@ mod property_token {
             let caller = self.env().caller();
             if caller != self.admin {
                 return Err(Error::Unauthorized);
+            }
+
+            // Reject if the operator set would fall below the configured quorum floor
+            let remaining = self
+                .bridge_operators
+                .iter()
+                .filter(|op| **op != operator)
+                .count();
+            if remaining < self.bridge_config.min_signatures_required as usize {
+                return Err(Error::InsufficientSignatures);
             }
 
             self.bridge_operators.retain(|op| op != &operator);
@@ -1917,6 +2330,17 @@ mod property_token {
             self.admin
         }
 
+        /// Update the maximum number of recorded errors per caller within one window.
+        #[ink(message)]
+        pub fn set_error_limit(&mut self, limit: u64) -> Result<(), Error> {
+            self.ensure_admin()?;
+            if limit == 0 {
+                return Err(Error::InvalidRequest);
+            }
+            self.error_limit = limit;
+            Ok(())
+        }
+
         /// Internal helper to add a token to an owner
         fn add_token_to_owner(&mut self, to: AccountId, _token_id: TokenId) -> Result<(), Error> {
             let count = self.owner_token_count.get(to).unwrap_or(0);
@@ -1952,8 +2376,8 @@ mod property_token {
                 to,
                 timestamp: self.env().block_timestamp(),
                 transaction_hash: {
-                    use scale::Encode;
                     use ink::env::hash::{Blake2x256, CryptoHash};
+                    use scale::Encode;
                     let data = (&from, &to, token_id);
                     let encoded = data.encode();
                     let mut hash_bytes = [0u8; 32];
@@ -1972,6 +2396,67 @@ mod property_token {
         /// Helper to check if token has pending bridge request
         fn has_pending_bridge_request(&self, token_id: TokenId) -> bool {
             self.token_pending_requests.contains(token_id)
+        }
+
+        /// Count distinct signatures that still belong to the *current* operator set.
+        /// Votes from removed operators no longer contribute to quorum.
+        fn count_valid_operator_signatures(&self, request: &MultisigBridgeRequest) -> u8 {
+            let mut seen: Vec<AccountId> = Vec::new();
+            for signer in request.signatures.iter() {
+                if self.bridge_operators.contains(signer) && !seen.contains(signer) {
+                    seen.push(*signer);
+                }
+            }
+            u8::try_from(seen.len()).unwrap_or(u8::MAX)
+        }
+
+        /// If `block_number > expires_at`, mark expired, unlock any locked token,
+        /// free the pending slot, emit `BridgeRequestExpired`, and return
+        /// `Err(RequestExpired)`. No-op when still within the timeout window.
+        fn expire_bridge_request_if_needed(
+            &mut self,
+            request_id: u64,
+            request: &mut MultisigBridgeRequest,
+        ) -> Result<(), Error> {
+            let Some(expires_at) = request.expires_at else {
+                return Ok(());
+            };
+            if u64::from(self.env().block_number()) <= expires_at {
+                return Ok(());
+            }
+
+            // Already terminal — still reject further action
+            if matches!(
+                request.status,
+                BridgeOperationStatus::Expired
+                    | BridgeOperationStatus::Completed
+                    | BridgeOperationStatus::Failed
+            ) {
+                return Err(Error::RequestExpired);
+            }
+
+            request.status = BridgeOperationStatus::Expired;
+            self.token_pending_requests.remove(request.token_id);
+
+            // Unlock token if it was locked to the zero address during quorum
+            if let Some(token_owner) = self.token_owner.get(request.token_id) {
+                if token_owner == AccountId::from([0u8; 32]) {
+                    self.token_owner.insert(request.token_id, &request.sender);
+                    self.balances
+                        .insert((&request.sender, &request.token_id), &1u128);
+                    let _ = self.add_token_to_owner(request.sender, request.token_id);
+                }
+            }
+
+            self.bridge_requests.insert(request_id, request);
+
+            self.env().emit_event(BridgeRequestExpired {
+                request_id,
+                token_id: request.token_id,
+                expires_at,
+            });
+
+            Err(Error::RequestExpired)
         }
 
         /// Helper to generate bridge transaction hash using Blake2x256 (issue #458).
@@ -2017,54 +2502,101 @@ mod property_token {
             subtotal.saturating_add(buffer)
         }
 
-        /// Log an error for monitoring and debugging
+        fn current_error_rate_state(&self, account: &AccountId, timestamp: u64) -> ErrorRateState {
+            match self.error_rates.get(account) {
+                Some(state)
+                    if timestamp < state.window_start.saturating_add(ERROR_WINDOW_DURATION_MS) =>
+                {
+                    state
+                }
+                _ => ErrorRateState {
+                    count: 0,
+                    window_start: timestamp,
+                },
+            }
+        }
+
+        fn hash_error_entry(
+            log_id: u64,
+            account: &AccountId,
+            error_code: &String,
+            message: &String,
+            timestamp: u64,
+            context: &Vec<(String, String)>,
+            prev_error_hash: &Hash,
+        ) -> Hash {
+            use ink::env::hash::{Blake2x256, CryptoHash};
+            use scale::Encode;
+
+            let data = (
+                log_id,
+                account,
+                error_code,
+                message,
+                timestamp,
+                context,
+                prev_error_hash,
+            );
+            let encoded = data.encode();
+            let mut hash_bytes = [0u8; 32];
+            Blake2x256::hash(&encoded, &mut hash_bytes);
+            Hash::from(hash_bytes)
+        }
+
+        /// Log an error for monitoring and debugging.
         fn log_error(
             &mut self,
             account: AccountId,
             error_code: String,
             message: String,
             context: Vec<(String, String)>,
-        ) {
+        ) -> Result<(), Error> {
             let timestamp = self.env().block_timestamp();
+            let mut rate_state = self.current_error_rate_state(&account, timestamp);
+
+            if rate_state.count >= self.error_limit {
+                return Err(Error::RateLimited);
+            }
+
+            rate_state.count = rate_state.count.saturating_add(1);
+            self.error_rates.insert(&account, &rate_state);
 
             // Update error count for this account and error code
             let key = (account, error_code.clone());
             let current_count = self.error_counts.get(&key).unwrap_or(0);
-            self.error_counts.insert(&key, &(current_count + 1));
-
-            // Update error rate (1 hour window)
-            let window_duration = 3600_000u64; // 1 hour in milliseconds
-            let rate_key = error_code.clone();
-            let (mut count, window_start) =
-                self.error_rates.get(&rate_key).unwrap_or((0, timestamp));
-
-            if timestamp >= window_start + window_duration {
-                // Reset window
-                count = 1;
-                self.error_rates.insert(&rate_key, &(count, timestamp));
-            } else {
-                count += 1;
-                self.error_rates.insert(&rate_key, &(count, window_start));
-            }
-
-            // Add to recent errors (keep last 100)
             let log_id = self.error_log_counter;
-            self.error_log_counter = self.error_log_counter.wrapping_add(1);
-
-            // Only keep last 100 errors (simple circular buffer)
-            if log_id >= 100 {
-                let old_id = log_id.wrapping_sub(100);
-                self.recent_errors.remove(&old_id);
-            }
+            let total_errors = self.account_error_totals.get(&account).unwrap_or(0);
+            let prev_error_hash = self.last_error_hash;
+            let entry_hash = Self::hash_error_entry(
+                log_id,
+                &account,
+                &error_code,
+                &message,
+                timestamp,
+                &context,
+                &prev_error_hash,
+            );
 
             let error_entry = ErrorLogEntry {
+                log_id,
                 error_code: error_code.clone(),
                 message,
                 account,
                 timestamp,
                 context,
+                prev_error_hash,
+                entry_hash,
             };
-            self.recent_errors.insert(&log_id, &error_entry);
+            let slot = log_id % MAX_ERROR_LOG;
+            self.recent_errors.insert(&slot, &error_entry);
+            self.error_counts
+                .insert(&key, &(current_count.saturating_add(1)));
+            self.account_error_totals
+                .insert(&error_entry.account, &(total_errors.saturating_add(1)));
+            self.error_log_counter = self.error_log_counter.wrapping_add(1);
+            self.last_error_hash = error_entry.entry_hash;
+
+            Ok(())
         }
 
         /// Get error count for an account and error code
@@ -2073,20 +2605,30 @@ mod property_token {
             self.error_counts.get(&(account, error_code)).unwrap_or(0)
         }
 
-        /// Get error rate for an error code (errors per hour)
+        /// Get the current sliding-window error rate for an account.
         #[ink(message)]
-        pub fn get_error_rate(&self, error_code: String) -> u64 {
+        pub fn get_error_rate(&self, account: AccountId) -> u64 {
             let timestamp = self.env().block_timestamp();
-            let window_duration = 3600_000u64; // 1 hour
+            self.current_error_rate_state(&account, timestamp).count
+        }
 
-            if let Some((count, window_start)) = self.error_rates.get(&error_code) {
-                if timestamp >= window_start + window_duration {
-                    0 // Window expired
-                } else {
-                    count
-                }
-            } else {
-                0
+        /// Get aggregated error telemetry for a caller.
+        #[ink(message)]
+        pub fn get_error_stats(&self, account: AccountId) -> ErrorStats {
+            let timestamp = self.env().block_timestamp();
+            let rate_state = self.current_error_rate_state(&account, timestamp);
+            let total_errors = self.account_error_totals.get(&account).unwrap_or(0);
+            let is_rate_limited = rate_state.count >= self.error_limit;
+
+            ErrorStats {
+                account,
+                total_errors,
+                window_error_count: rate_state.count,
+                window_start: rate_state.window_start,
+                error_limit: self.error_limit,
+                window_duration_ms: ERROR_WINDOW_DURATION_MS,
+                remaining_before_block: self.error_limit.saturating_sub(rate_state.count),
+                is_rate_limited,
             }
         }
 
@@ -2099,14 +2641,16 @@ mod property_token {
             }
 
             let mut errors = Vec::new();
-            let start_id = if self.error_log_counter > limit as u64 {
-                self.error_log_counter - limit as u64
-            } else {
-                0
-            };
+            let retained = core::cmp::min(self.error_log_counter, MAX_ERROR_LOG);
+            let requested = core::cmp::min(retained, limit as u64);
+            let start_id = self.error_log_counter.saturating_sub(requested);
 
             for i in start_id..self.error_log_counter {
-                if let Some(entry) = self.recent_errors.get(&i) {
+                let slot = i % MAX_ERROR_LOG;
+                if let Some(entry) = self.recent_errors.get(&slot) {
+                    if entry.log_id != i {
+                        continue;
+                    }
                     errors.push(entry);
                 }
             }
@@ -2138,41 +2682,50 @@ mod property_token {
 
     /// Implementation of DataMigration for PropertyToken
     impl DataMigration for PropertyToken {
-        type Error = Error;
-
         /// Pause bridge-related token operations before migration.
         #[ink(message)]
-        fn pause_for_migration(&mut self) -> Result<(), Error> {
-            self.ensure_admin()?;
+        fn pause_for_migration(&mut self) -> Result<(), MigrationError> {
+            self.ensure_admin()
+                .map_err(|_| MigrationError::Unauthorized)?;
             self.bridge_config.emergency_pause = true;
             Ok(())
         }
 
         /// Resume bridge-related token operations after migration.
         #[ink(message)]
-        fn resume_after_migration(&mut self) -> Result<(), Error> {
-            self.ensure_admin()?;
+        fn resume_after_migration(&mut self) -> Result<(), MigrationError> {
+            self.ensure_admin()
+                .map_err(|_| MigrationError::Unauthorized)?;
             self.bridge_config.emergency_pause = false;
             Ok(())
         }
 
         /// Export a serialized token storage chunk for migration tooling.
         #[ink(message)]
-        fn extract_data_chunk(&self, _chunk_id: u32, _start_index: u32, _count: u32) -> Result<Vec<u8>, Error> {
+        fn extract_data_chunk(
+            &self,
+            _chunk_id: u32,
+            _start_index: u32,
+            _count: u32,
+        ) -> Result<Vec<u8>, MigrationError> {
+            self.ensure_admin()
+                .map_err(|_| MigrationError::Unauthorized)?;
+        ) -> Result<Vec<u8>, Error> {
             self.ensure_admin()?;
             Ok(Vec::new())
         }
 
         /// Import serialized token storage data during migration.
         #[ink(message)]
-        fn initialize_with_migrated_data(&mut self, _data: Vec<u8>) -> Result<(), Error> {
-            self.ensure_admin()?;
+        fn initialize_with_migrated_data(&mut self, _data: Vec<u8>) -> Result<(), MigrationError> {
+            self.ensure_admin()
+                .map_err(|_| MigrationError::Unauthorized)?;
             Ok(())
         }
 
         /// Confirm migrated token state is internally consistent.
         #[ink(message)]
-        fn verify_migration(&self) -> Result<bool, Error> {
+        fn verify_migration(&self) -> Result<bool, MigrationError> {
             Ok(true)
         }
     }
@@ -2182,6 +2735,23 @@ mod property_token {
         fn ensure_admin(&self) -> Result<(), Error> {
             if self.env().caller() != self.admin {
                 return Err(Error::Unauthorized);
+            }
+            Ok(())
+        }
+
+        /// Require the caller to be the configured governance contract.
+        fn ensure_governance(&self) -> Result<(), Error> {
+            match self.governance {
+                Some(governance) if self.env().caller() == governance => Ok(()),
+                Some(_) => Err(Error::Unauthorized),
+                None => Err(Error::GovernanceNotSet),
+            }
+        }
+
+        /// Halt user-facing token and share movement while emergency pause is active.
+        fn ensure_not_paused(&self) -> Result<(), Error> {
+            if self.bridge_config.emergency_pause {
+                return Err(Error::BridgePaused);
             }
             Ok(())
         }

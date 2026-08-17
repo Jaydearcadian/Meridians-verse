@@ -21,8 +21,8 @@ export class Pagination {
       take: paginationQueryDto.limit,
     });
 
-    const baseUrl = this.request.protocol;
-    +'://' + this.request.headers.host + '/';
+    const baseUrl =
+      this.request.protocol + '://' + this.request.headers.host + '/';
 
     const newUrl = new URL(this.request.url, baseUrl);
 
@@ -65,5 +65,65 @@ export class Pagination {
     };
 
     return finalResponse;
+  }
+
+  public async paginatedCursorQuery<T extends ObjectLiteral>(
+    query: {
+      limit?: number;
+      cursor?: number;
+      startDate?: Date;
+      endDate?: Date;
+    },
+    repository: Repository<T>,
+    relations: string[] = [],
+  ): Promise<{ data: T[]; nextCursor: number | null; total: number }> {
+    const limit = query.limit || 10;
+    const { cursor, startDate, endDate } = query;
+
+    const queryBuilder = repository.createQueryBuilder('entity');
+
+    for (const rel of relations) {
+      queryBuilder.leftJoinAndSelect(`entity.${rel}`, rel);
+    }
+
+    queryBuilder.orderBy('entity.id', 'DESC');
+
+    if (cursor) {
+      queryBuilder.andWhere('entity.id < :cursor', { cursor });
+    }
+
+    if (startDate) {
+      queryBuilder.andWhere('entity.publishedDate >= :startDate', {
+        startDate,
+      });
+    }
+    if (endDate) {
+      queryBuilder.andWhere('entity.publishedDate <= :endDate', { endDate });
+    }
+
+    queryBuilder.take(limit + 1);
+
+    const data = await queryBuilder.getMany();
+
+    const hasMore = data.length > limit;
+    const items = hasMore ? data.slice(0, limit) : data;
+    const nextCursor = hasMore ? (items[items.length - 1] as any).id : null;
+
+    const countBuilder = repository.createQueryBuilder('entity');
+    if (startDate) {
+      countBuilder.andWhere('entity.publishedDate >= :startDate', {
+        startDate,
+      });
+    }
+    if (endDate) {
+      countBuilder.andWhere('entity.publishedDate <= :endDate', { endDate });
+    }
+    const total = await countBuilder.getCount();
+
+    return {
+      data: items,
+      nextCursor,
+      total,
+    };
   }
 }

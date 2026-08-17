@@ -11,11 +11,15 @@ export enum AuditAction {
   READ = 'READ',
   UPDATE = 'UPDATE',
   DELETE = 'DELETE',
+  CONTRACT_EVENT = 'CONTRACT_EVENT',
 }
 
 @Entity('audit_logs')
 @Index(['entityName', 'entityId'])
 @Index(['performedById'])
+@Index(['txHash'])
+@Index(['contract', 'contractAction'])
+@Index(['blockNumber'])
 export class AuditLog {
   @PrimaryGeneratedColumn()
   id: number;
@@ -46,4 +50,34 @@ export class AuditLog {
 
   @CreateDateColumn()
   createdAt: Date;
+
+  @Column({ type: 'varchar', length: 128, nullable: true, unique: true })
+  txHash: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  contract: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  contractAction: string | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  blockNumber: number | null;
+
+  @Column({ type: 'varchar', length: 128, nullable: true })
+  previousHash: string | null;
+
+  @Column({ type: 'varchar', length: 128, nullable: true })
+  chainHash: string | null;
+
+  @Column({ type: 'json', nullable: true })
+  rawEvent: Record<string, unknown> | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  participantAddress: string | null;
+
+  @Column({ type: 'int', default: 0 })
+  contributionXp: number;
+
+  @Column({ type: 'int', nullable: true })
+  epochNumber: number | null;
 }

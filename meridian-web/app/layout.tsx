@@ -3,17 +3,34 @@ import { Geist, Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
 import { ThemeProvider } from '@/components/theme-provider'
+import { Toaster } from '@/components/ui/sonner'
+import { PerformanceMonitor } from '@/components/performance-monitor'
+import { MotionConfig } from 'framer-motion'
 
-// `display: 'swap'` keeps text visible with a fallback font while Geist
-// loads, so web fonts never block first paint / LCP. (next/font defaults to
-// swap; we set it explicitly to document the intent.)
-const _geist = Geist({ subsets: ["latin"], display: "swap" });
-const _geistMono = Geist_Mono({ subsets: ["latin"], display: "swap" });
+const _geist = Geist({ subsets: ["latin"], display: "swap", preload: true });
+const _geistMono = Geist_Mono({ subsets: ["latin"], display: "swap", preload: true });
 
 export const metadata: Metadata = {
   title: 'MERIDIAN - Where Effort Meets Value',
-  description: 'A productivity-powered on-chain economy platform combining focus, payment streams, and yield opportunities.',
+  description:
+    'A productivity-powered on-chain economy platform combining focus, payment streams, and yield opportunities.',
   generator: 'v0.app',
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_SITE_URL ?? 'https://meridian.app',
+  ),
+  openGraph: {
+    title: 'MERIDIAN - Where Effort Meets Value',
+    description:
+      'Earn by staying focused, stream payments in real-time, and participate in yield pools with zero loss.',
+    type: 'website',
+    locale: 'en_US',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'MERIDIAN - Where Effort Meets Value',
+    description:
+      'Earn by staying focused, stream payments in real-time, and participate in yield pools with zero loss.',
+  },
   icons: {
     icon: [
       {
@@ -46,14 +63,15 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    // suppressHydrationWarning is required by next-themes to avoid a
-    // hydration mismatch when it writes the resolved theme class on
-    // the <html> element during the initial client render.
     <html
       lang="en"
       className="bg-background"
       suppressHydrationWarning
     >
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+      </head>
       <body className="font-sans antialiased">
         <ThemeProvider
           attribute="class"
@@ -63,9 +81,14 @@ export default function RootLayout({
           storageKey="meridian-theme"
           themes={['light', 'dark', 'system']}
         >
-          {children}
+          <MotionConfig reducedMotion="user">
+            {children}
+          </MotionConfig>
+          <Toaster />
+          <PerformanceMonitor />
         </ThemeProvider>
         {process.env.NODE_ENV === 'production' && <Analytics />}
+        <PerformanceMonitor />
       </body>
     </html>
   )

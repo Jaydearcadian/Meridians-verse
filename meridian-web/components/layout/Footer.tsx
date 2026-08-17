@@ -65,14 +65,26 @@ export function Footer() {
           <div>
             <h3 className="font-semibold text-foreground mb-4">Connect</h3>
             <div className="flex gap-4">
-              <Link href="#" className="text-muted-foreground hover:text-primary transition-colors">
-                <Twitter size={20} />
+              <Link
+                href="#"
+                aria-label="MERIDIAN on Twitter"
+                className="text-muted-foreground hover:text-primary transition-colors"
+              >
+                <Twitter size={20} aria-hidden="true" />
               </Link>
-              <Link href="#" className="text-muted-foreground hover:text-primary transition-colors">
-                <Github size={20} />
+              <Link
+                href="#"
+                aria-label="MERIDIAN on GitHub"
+                className="text-muted-foreground hover:text-primary transition-colors"
+              >
+                <Github size={20} aria-hidden="true" />
               </Link>
-              <Link href="#" className="text-muted-foreground hover:text-primary transition-colors">
-                <Linkedin size={20} />
+              <Link
+                href="#"
+                aria-label="MERIDIAN on LinkedIn"
+                className="text-muted-foreground hover:text-primary transition-colors"
+              >
+                <Linkedin size={20} aria-hidden="true" />
               </Link>
             </div>
           </div>

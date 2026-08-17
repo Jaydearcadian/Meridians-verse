@@ -1,16 +1,72 @@
 'use client';
 
+import { Suspense } from 'react';
+import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { ArrowRight } from 'lucide-react';
+import { cardReveal, sectionReveal, sectionViewport } from '@/lib/animations/variants';
 
-export function CTA() {
+import { cn } from '@/lib/utils';
+import {
+  CTA_QUERY_PARAM,
+  CTA_VARIANTS,
+  DEFAULT_CTA_VARIANT,
+  resolveCtaVariant,
+  type CtaButtonStyle,
+  type CtaVariant,
+  type CtaVariantId,
+} from '@/lib/cta-variants';
+
+interface CTAProps {
+  /**
+   * Explicitly select a variant. When omitted, the variant is resolved from
+   * the `?cta=` query param (e.g. `/?cta=member`), falling back to the
+   * marketing variant.
+   */
+  variant?: CtaVariantId;
+}
+
+const BUTTON_STYLES: Record<CtaButtonStyle, string> = {
+  solid:
+    'bg-primary text-primary-foreground hover:bg-primary/90',
+  outline:
+    'border border-primary text-primary hover:bg-primary/5',
+  ghost:
+    'text-primary hover:bg-primary/10',
+};
+
+export function CTA({ variant }: CTAProps) {
+  // An explicit prop needs no query-param lookup, so skip the Suspense
+  // boundary useSearchParams requires and render directly.
+  if (variant) {
+    return <CTAContent variant={variant} />;
+  }
+
   return (
-    <section className="py-20 px-4 max-w-4xl mx-auto">
+    <Suspense fallback={<CTAContent variant={DEFAULT_CTA_VARIANT} />}>
+      <CTAFromQuery />
+    </Suspense>
+  );
+}
+
+/** Resolves the variant from the URL, e.g. `/?cta=member`. */
+function CTAFromQuery() {
+  const searchParams = useSearchParams();
+  const resolved = resolveCtaVariant(undefined, searchParams.get(CTA_QUERY_PARAM));
+  return <CTAContent variant={resolved.id as CtaVariantId} />;
+}
+
+function CTAContent({ variant }: { variant: CtaVariantId }) {
+  const { badge, heading, description, actions, footnote }: CtaVariant = CTA_VARIANTS[variant];
+
+  return (
+    <section aria-labelledby="cta-heading" className="py-20 px-4 max-w-4xl mx-auto">
       <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        whileInView={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.6 }}
-        viewport={{ once: true }}
+        variants={cardReveal}
+        initial="hidden"
+        whileInView="visible"
+        viewport={sectionViewport}
         className="bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/30 rounded-3xl p-12 text-center relative overflow-hidden"
       >
         {/* Background decoration */}
@@ -19,51 +75,64 @@ export function CTA() {
           <div className="absolute bottom-0 left-0 w-64 h-64 bg-primary/5 rounded-full blur-3xl -ml-32 -mb-32" />
         </div>
 
+        {badge && (
+          <motion.div
+            variants={sectionReveal}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-primary/30 bg-primary/10 mb-6"
+          >
+            <span className="w-2 h-2 rounded-full bg-primary" aria-hidden="true" />
+            <span className="text-sm font-medium text-primary">{badge}</span>
+          </motion.div>
+        )}
+
         <motion.h2
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-          viewport={{ once: true }}
+          id="cta-heading"
+          variants={sectionReveal}
           className="text-4xl sm:text-5xl font-bold text-foreground mb-4"
         >
-          Ready to Transform Your Productivity?
+          {heading}
         </motion.h2>
 
         <motion.p
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.1 }}
-          viewport={{ once: true }}
+          variants={sectionReveal}
           className="text-lg text-muted-foreground mb-8 max-w-2xl mx-auto"
         >
-          Join thousands of users earning real value from their focus. Start your journey today and begin earning with every productive moment.
+          {description}
         </motion.p>
 
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.2 }}
-          viewport={{ once: true }}
+          variants={sectionReveal}
           className="flex flex-col sm:flex-row gap-4 justify-center items-center"
         >
-          <button className="px-8 py-4 rounded-full bg-primary text-primary-foreground font-semibold hover:bg-primary/90 transition-all duration-200 flex items-center gap-2 group">
-            Start Earning Now
-            <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-          </button>
-          <button className="px-8 py-4 rounded-full border border-primary text-primary font-semibold hover:bg-primary/5 transition-all duration-200">
-            Learn More
-          </button>
+          {actions.map((action) => (
+            <Link
+              key={action.label}
+              href={action.href}
+              className={cn(
+                'px-8 py-4 rounded-full font-semibold transition-all duration-200 inline-flex items-center gap-2 group',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                BUTTON_STYLES[action.style]
+              )}
+            >
+              {action.label}
+              {action.withArrow && (
+                <ArrowRight
+                  aria-hidden="true"
+                  className="w-4 h-4 group-hover:translate-x-1 transition-transform"
+                />
+              )}
+            </Link>
+          ))}
         </motion.div>
 
-        <motion.p
-          initial={{ opacity: 0 }}
-          whileInView={{ opacity: 1 }}
-          transition={{ duration: 0.6, delay: 0.3 }}
-          viewport={{ once: true }}
-          className="text-sm text-muted-foreground mt-8"
-        >
-          No credit card required. Free to start. Premium features available.
-        </motion.p>
+        {footnote && (
+          <motion.p
+            variants={sectionReveal}
+            className="text-sm text-muted-foreground mt-8"
+          >
+            {footnote}
+          </motion.p>
+        )}
       </motion.div>
     </section>
   );

@@ -1,7 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, IntoVal};
 use stellar_insured_lib::{InsuranceClaim, ClaimStatus, InsurancePolicy, PolicyStatus, PoolStats};
+use stellar_insured_lib::access_control::{self, AccessControlRole};
 
 #[contracttype]
 #[derive(Clone)]
@@ -14,13 +15,10 @@ pub enum DataKey {
     /// #409: Maps policy_id -> active claim_id. Present only while a claim is active
     /// (Submitted / UnderReview / Approved). Cleared on Rejected or Settled.
     PolicyActiveClaim(u64),
+    SettlingClaim(Address),
 }
 
 // --- Storage helpers (#378: data access abstraction) ---
-
-fn get_admin(env: &Env) -> Address {
-    env.storage().instance().get(&DataKey::Admin).unwrap()
-}
 
 fn get_claim_counter(env: &Env) -> u64 {
     env.storage().instance().get(&DataKey::ClaimCounter).unwrap_or(0)
@@ -52,6 +50,11 @@ impl ClaimsContract {
         env.storage().instance().set(&DataKey::PolicyContract, &policy_contract);
         env.storage().instance().set(&DataKey::RiskPool, &risk_pool);
         env.storage().instance().set(&DataKey::ClaimCounter, &0u64);
+        access_control::init_access_control(&env, &admin);
+    }
+
+    pub fn set_role(env: Env, addr: Address, role: AccessControlRole) {
+        access_control::set_role(&env, &env.current_contract_address(), &addr, role);
     }
 
     pub fn submit_claim(env: Env, policy_id: u64, amount: i128) -> u64 {
@@ -61,7 +64,7 @@ impl ClaimsContract {
         let is_active: bool = env.invoke_contract(
             &policy_contract,
             &symbol_short!("is_active"),
-            (policy_id,).into(),
+            soroban_sdk::vec![&env, policy_id.into_val(&env)],
         );
         if !is_active {
             panic!("Policy is not active or has expired");
@@ -70,7 +73,7 @@ impl ClaimsContract {
         let policy: InsurancePolicy = env.invoke_contract(
             &policy_contract,
             &symbol_short!("get_pol"),
-            (policy_id,).into(),
+            soroban_sdk::vec![&env, policy_id.into_val(&env)],
         );
 
         // Consistency check: claim amount must not exceed coverage
@@ -93,7 +96,7 @@ impl ClaimsContract {
         let claim = InsuranceClaim {
             claim_id: counter,
             policy_id,
-            claimant,
+            claimant: claimant.clone(),
             amount,
             status: ClaimStatus::Submitted,
             submitted_at: env.ledger().timestamp(),
@@ -107,15 +110,15 @@ impl ClaimsContract {
         // #412: Enhanced event emission with more details
         env.events().publish(
             (symbol_short!("claim"), symbol_short!("submitted")),
-            (counter, policy_id, claimant, amount),
+            (counter, policy_id, claimant.clone(), amount),
         );
 
         counter
     }
 
     pub fn start_review(env: Env, claim_id: u64) {
-        let admin = get_admin(&env);
-        admin.require_auth();
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
 
         let mut claim = get_claim_inner(&env, claim_id);
         if claim.status != ClaimStatus::Submitted {
@@ -133,8 +136,8 @@ impl ClaimsContract {
     }
 
     pub fn approve_claim(env: Env, claim_id: u64) {
-        let admin = get_admin(&env);
-        admin.require_auth();
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
 
         let mut claim = get_claim_inner(&env, claim_id);
         if claim.status != ClaimStatus::UnderReview {
@@ -152,8 +155,8 @@ impl ClaimsContract {
     }
 
     pub fn reject_claim(env: Env, claim_id: u64) {
-        let admin = get_admin(&env);
-        admin.require_auth();
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
 
         let mut claim = get_claim_inner(&env, claim_id);
         if claim.status != ClaimStatus::UnderReview {
@@ -174,8 +177,8 @@ impl ClaimsContract {
     }
 
     pub fn settle_claim(env: Env, claim_id: u64) {
-        let admin = get_admin(&env);
-        admin.require_auth();
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
 
         let mut claim = get_claim_inner(&env, claim_id);
         if claim.status != ClaimStatus::Approved {
@@ -189,7 +192,7 @@ impl ClaimsContract {
         let pool_stats: PoolStats = env.invoke_contract(
             &risk_pool,
             &symbol_short!("get_stats"),
-            ().into(),
+            soroban_sdk::Vec::new(&env),
         );
         
         if pool_stats.available_capital < claim.amount {
@@ -203,14 +206,15 @@ impl ClaimsContract {
         env.invoke_contract::<()>(
             &risk_pool,
             &symbol_short!("payout"),
-            (claim.claimant.clone(), claim.amount).into(),
+            soroban_sdk::vec![&env, claim.claimant.clone().into_val(&env), claim.amount.into_val(&env)],
         );
 
         // Update total claimed in policy contract
+        let policy_contract: Address = env.storage().instance().get(&DataKey::PolicyContract).unwrap();
         env.invoke_contract::<()>(
             &policy_contract,
             &symbol_short!("update_cl"),
-            (claim.policy_id, claim.amount).into(),
+            soroban_sdk::vec![&env, claim.policy_id.into_val(&env), claim.amount.into_val(&env)],
         );
 
         claim.status = ClaimStatus::Settled;
@@ -225,10 +229,7 @@ impl ClaimsContract {
             (claim_id, claim.amount, claim.claimant),
         );
     }
-}
 
-#[contractimpl]
-impl ClaimsContract {
     pub fn get_claim(env: Env, claim_id: u64) -> InsuranceClaim {
         get_claim_inner(&env, claim_id)
     }
@@ -237,3 +238,84 @@ impl ClaimsContract {
         get_claim_counter(&env)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Env, Address};
+
+    fn setup() -> (Env, Address, Address, Address, Address) {
+        let env = Env::default();
+        let contract = env.register_contract(None, ClaimsContract);
+        let admin = Address::generate(&env);
+        let policy_contract = Address::generate(&env);
+        let risk_pool = Address::generate(&env);
+        env.mock_all_auths();
+        (env, contract, admin, policy_contract, risk_pool)
+    }
+
+    #[test]
+    fn test_initialize_sets_admin_role() {
+        let (env, contract, admin, policy, risk) = setup();
+        env.as_contract(&contract, || {
+            ClaimsContract::initialize(env.clone(), admin.clone(), policy, risk);
+        });
+        // admin should have Admin role
+        env.as_contract(&contract, || {
+            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized")]
+    fn test_non_admin_start_review_rejected() {
+        let (env, contract, admin, policy, risk) = setup();
+        env.as_contract(&contract, || {
+            ClaimsContract::initialize(env.clone(), admin.clone(), policy, risk);
+        });
+        // attacker has no role — should panic
+        env.as_contract(&contract, || {
+            ClaimsContract::start_review(env.clone(), 1);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized")]
+    fn test_non_admin_approve_claim_rejected() {
+        let (env, contract, admin, policy, risk) = setup();
+        env.as_contract(&contract, || {
+            ClaimsContract::initialize(env.clone(), admin.clone(), policy, risk);
+        });
+        env.as_contract(&contract, || {
+            ClaimsContract::approve_claim(env.clone(), 1);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized")]
+    fn test_non_admin_reject_claim_rejected() {
+        let (env, contract, admin, policy, risk) = setup();
+        env.as_contract(&contract, || {
+            ClaimsContract::initialize(env.clone(), admin.clone(), policy, risk);
+        });
+        env.as_contract(&contract, || {
+            ClaimsContract::reject_claim(env.clone(), 1);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized")]
+    fn test_non_admin_settle_claim_rejected() {
+        let (env, contract, admin, policy, risk) = setup();
+        env.as_contract(&contract, || {
+            ClaimsContract::initialize(env.clone(), admin.clone(), policy, risk);
+        });
+        env.as_contract(&contract, || {
+            ClaimsContract::settle_claim(env.clone(), 1);
+        });
+    }
+}
+
+#[cfg(test)]
+mod access_control_test;

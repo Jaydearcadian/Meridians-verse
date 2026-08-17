@@ -1,132 +1,162 @@
-'use client';
+'use client'
 
-import React from 'react';
-import { motion } from 'framer-motion';
-import { DollarSign, Zap, Award, TrendingUp, AlertTriangle, RefreshCw } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
-import { DashboardMetrics as MetricsType } from '@/lib/api/dashboard';
-import { ApiError } from '@/lib/api/client';
+import { useEffect, useState } from 'react'
+import { Activity, TrendingUp, Users, DollarSign, Wifi, WifiOff } from 'lucide-react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { useDashboardData } from '@/hooks/use-dashboard-data'
+import { DashboardData } from '@/lib/api/dashboard'
+import { AnimatedCounter } from './animated-counter'
+import { cn } from '@/lib/utils'
 
-export interface DashboardMetricsProps {
-  metrics?: MetricsType | null;
-  isLoading?: boolean;
-  error?: ApiError | Error | null;
-  onRetry?: () => void;
+interface DashboardMetricsProps {
+  initialData: DashboardData
 }
 
-export function DashboardMetrics({
-  metrics,
-  isLoading,
-  error,
-  onRetry,
-}: DashboardMetricsProps) {
-  if (isLoading) {
-    return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Card key={i} className="bg-card border-border">
-            <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-              <Skeleton className="h-4 w-24" />
-              <Skeleton className="h-5 w-5 rounded-full" />
-            </CardHeader>
-            <CardContent>
-              <Skeleton className="h-8 w-28 mb-1" />
-              <Skeleton className="h-3 w-20" />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-    );
-  }
+const iconMap = {
+  users: Users,
+  'dollar-sign': DollarSign,
+  'trending-up': TrendingUp,
+  activity: Activity,
+}
 
-  if (error) {
-    const errorMessage =
-      error instanceof ApiError
-        ? `[${error.code || error.status}] ${error.message}`
-        : error.message || 'An error occurred while loading metrics.';
+/**
+ * Dashboard Metrics Component
+ * 
+ * Displays animated metric cards with real-time updates.
+ * 
+ * Features:
+ * - Smooth number interpolation on mount and updates
+ * - Real-time polling with offline fallback
+ * - Visual indicator for offline/cached state
+ * - Zero layout shift (uses server data initially)
+ * - Accessible ARIA live regions for updates
+ */
+export function DashboardMetrics({ initialData }: DashboardMetricsProps) {
+  const { data, isOffline, lastUpdated } = useDashboardData({
+    initialData,
+    pollingInterval: 10000, // 10 seconds
+  })
 
-    return (
-      <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <AlertTriangle className="text-destructive h-6 w-6 shrink-0" />
-          <div>
-            <h4 className="font-semibold text-foreground">Failed to load dashboard metrics</h4>
-            <p className="text-sm text-muted-foreground">{errorMessage}</p>
-          </div>
-        </div>
-        {onRetry && (
-          <Button variant="outline" size="sm" onClick={onRetry} className="gap-2 shrink-0">
-            <RefreshCw size={14} />
-            Retry Request
-          </Button>
-        )}
-      </div>
-    );
-  }
-
-  if (!metrics) {
-    return null;
-  }
-
-  const items = [
-    {
-      title: 'Total Volume',
-      value: metrics.totalVolume,
-      description: 'Lifetime volume streamed',
-      icon: DollarSign,
-      color: 'text-primary',
-    },
-    {
-      title: 'Active Streams',
-      value: metrics.activeStreams.toLocaleString(),
-      description: 'Current real-time streams',
-      icon: Zap,
-      color: 'text-amber-500',
-    },
-    {
-      title: 'Total Yield',
-      value: metrics.totalYield,
-      description: 'Distributed in prize pools',
-      icon: TrendingUp,
-      color: 'text-emerald-500',
-    },
-    {
-      title: 'Total XP Earned',
-      value: metrics.totalXpEarned.toLocaleString(),
-      description: 'Earned via focus sessions',
-      icon: Award,
-      color: 'text-indigo-500',
-    },
-  ];
+  const metrics = data?.metrics || initialData.metrics
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-      {items.map((item, index) => {
-        const Icon = item.icon;
-        return (
-          <motion.div
-            key={item.title}
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3, delay: index * 0.05 }}
-          >
-            <Card className="bg-card border-border hover:border-primary/30 transition-colors">
-              <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  {item.title}
-                </CardTitle>
-                <Icon className={`h-5 w-5 ${item.color}`} />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-foreground">{item.value}</div>
-                <p className="text-xs text-muted-foreground mt-1">{item.description}</p>
-              </CardContent>
-            </Card>
-          </motion.div>
-        );
-      })}
+    <div className="space-y-4">
+      {/* Offline Indicator */}
+      {isOffline && (
+        <div className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900 dark:bg-amber-950">
+          <div className="flex items-center gap-2">
+            <WifiOff className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+            <p className="text-sm text-amber-800 dark:text-amber-300">
+              You're offline. Displaying cached data.
+            </p>
+          </div>
+          {lastUpdated && (
+            <Badge variant="outline" className="text-xs">
+              Last updated: {lastUpdated.toLocaleTimeString()}
+            </Badge>
+          )}
+        </div>
+      )}
+
+      {/* Metrics Grid */}
+      <div 
+        className="grid gap-4 md:grid-cols-2 lg:grid-cols-4"
+        role="region"
+        aria-label="Dashboard metrics"
+        aria-live="polite"
+        aria-atomic="false"
+      >
+        <MetricCard
+          label={metrics.activeUsers.label}
+          value={metrics.activeUsers.value}
+          delta={metrics.activeUsers.delta}
+          deltaType={metrics.activeUsers.deltaType}
+          icon={iconMap[metrics.activeUsers.icon as keyof typeof iconMap]}
+          unit={metrics.activeUsers.unit}
+        />
+        <MetricCard
+          label={metrics.totalRevenue.label}
+          value={metrics.totalRevenue.value}
+          delta={metrics.totalRevenue.delta}
+          deltaType={metrics.totalRevenue.deltaType}
+          icon={iconMap[metrics.totalRevenue.icon as keyof typeof iconMap]}
+          unit={metrics.totalRevenue.unit}
+          prefix={metrics.totalRevenue.unit === '$' ? '$' : undefined}
+        />
+        <MetricCard
+          label={metrics.conversionRate.label}
+          value={metrics.conversionRate.value}
+          delta={metrics.conversionRate.delta}
+          deltaType={metrics.conversionRate.deltaType}
+          icon={iconMap[metrics.conversionRate.icon as keyof typeof iconMap]}
+          unit={metrics.conversionRate.unit}
+          suffix={metrics.conversionRate.unit === '%' ? '%' : undefined}
+          decimals={2}
+        />
+        <MetricCard
+          label={metrics.avgSessionDuration.label}
+          value={metrics.avgSessionDuration.value}
+          delta={metrics.avgSessionDuration.delta}
+          deltaType={metrics.avgSessionDuration.deltaType}
+          icon={iconMap[metrics.avgSessionDuration.icon as keyof typeof iconMap]}
+          unit={metrics.avgSessionDuration.unit}
+          suffix="s"
+        />
+      </div>
     </div>
-  );
+  )
+}
+
+interface MetricCardProps {
+  label: string
+  value: number
+  delta: number
+  deltaType: 'positive' | 'negative' | 'neutral'
+  icon: React.ComponentType<{ className?: string }>
+  unit?: string
+  prefix?: string
+  suffix?: string
+  decimals?: number
+}
+
+function MetricCard({
+  label,
+  value,
+  delta,
+  deltaType,
+  icon: Icon,
+  prefix,
+  suffix,
+  decimals = 0,
+}: MetricCardProps) {
+  const deltaColor = {
+    positive: 'text-emerald-600 dark:text-emerald-400',
+    negative: 'text-rose-600 dark:text-rose-400',
+    neutral: 'text-muted-foreground',
+  }
+
+  const deltaIcon = delta >= 0 ? '↑' : '↓'
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+        <CardTitle className="text-sm font-medium">{label}</CardTitle>
+        <Icon className="h-4 w-4 text-muted-foreground" />
+      </CardHeader>
+      <CardContent>
+        <div className="text-2xl font-bold">
+          {prefix}
+          <AnimatedCounter value={value} decimals={decimals} />
+          {suffix}
+        </div>
+        <p className={cn('text-xs mt-1 flex items-center gap-1', deltaColor[deltaType])}>
+          <span aria-hidden="true">{deltaIcon}</span>
+          <span>
+            {Math.abs(delta).toFixed(1)}% from last period
+          </span>
+        </p>
+      </CardContent>
+    </Card>
+  )
 }

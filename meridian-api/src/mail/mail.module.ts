@@ -2,12 +2,8 @@ import { Global, Module } from '@nestjs/common';
 import { MailProvider } from './providers/mail.provider';
 import { MailerModule } from '@nestjs-modules/mailer';
 import { ConfigService } from '@nestjs/config';
-import { config } from 'process';
-import { from } from 'form-data';
-import { Template } from 'ejs';
 import { join } from 'path';
-import { strict } from 'assert';
-import { EjsAdapter } from '@nestjs-modules/mailer/dist/adapters/ejs.adapter';
+import { EjsAdapter } from '@nestjs-modules/mailer/adapters/ejs.adapter';
 
 @Global()
 @Module({

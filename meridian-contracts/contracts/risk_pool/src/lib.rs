@@ -1,6 +1,11 @@
 #![no_std]
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
+use stellar_insured_lib::RiskPoolError;
+use stellar_insured_lib::access_control::{self, AccessControlRole};
+
+#[cfg(test)]
+mod migration_test;
 
 #[contracttype]
 #[derive(Clone)]
@@ -12,6 +17,21 @@ pub enum DataKey {
     AvailableCapital,
     ClaimsPaid,
     ProviderStake(Address),
+    Version,
+    LockedCapital,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[contracttype]
+pub enum StorageVersion {
+    V1 = 1,
+    V2 = 2,
+}
+
+impl StorageVersion {
+    pub const fn current() -> Self {
+        StorageVersion::V2
+    }
 }
 
 #[contracttype]
@@ -23,10 +43,6 @@ pub struct PoolStats {
 }
 
 // --- Storage helpers (#378: data access abstraction) ---
-
-fn get_admin(env: &Env) -> Address {
-    env.storage().instance().get(&DataKey::Admin).unwrap()
-}
 
 fn get_token(env: &Env) -> Address {
     env.storage().instance().get(&DataKey::Token).unwrap()
@@ -51,9 +67,9 @@ pub struct RiskPoolContract;
 
 #[contractimpl]
 impl RiskPoolContract {
-    pub fn initialize(env: Env, admin: Address, token: Address, min_stake: i128) {
+    pub fn initialize(env: Env, admin: Address, token: Address, min_stake: i128) -> Result<(), RiskPoolError> {
         if env.storage().instance().has(&DataKey::Admin) {
-            panic!("Already initialized");
+            return Err(RiskPoolError::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
@@ -61,20 +77,29 @@ impl RiskPoolContract {
         env.storage().instance().set(&DataKey::TotalCapital, &0i128);
         env.storage().instance().set(&DataKey::AvailableCapital, &0i128);
         env.storage().instance().set(&DataKey::ClaimsPaid, &0i128);
+        env.storage().instance().set(&DataKey::Version, &StorageVersion::current());
+        env.storage().instance().set(&DataKey::LockedCapital, &0i128);
+        access_control::init_access_control(&env, &admin);
+        Ok(())
     }
 
-    pub fn deposit_liquidity(env: Env, provider: Address, amount: i128) {
+    pub fn set_role(env: Env, addr: Address, role: AccessControlRole) -> Result<(), RiskPoolError> {
+        access_control::set_role(&env, &env.current_contract_address(), &addr, role);
+        Ok(())
+    }
+
+    pub fn deposit_liquidity(env: Env, provider: Address, amount: i128) -> Result<(), RiskPoolError> {
         provider.require_auth();
         
         let min_stake: i128 = env.storage().instance().get(&DataKey::MinStake)
-            .expect("Contract not initialized");
+            .ok_or(RiskPoolError::NotInitialized)?;
 
         if amount < min_stake {
-            panic!("Amount below minimum stake");
+            return Err(RiskPoolError::BelowMinimumStake);
         }
 
         let token: Address = env.storage().instance().get(&DataKey::Token)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
+            .ok_or(RiskPoolError::NotInitialized)?;
         
         // Transfer tokens from provider to this contract
         let client = soroban_sdk::token::Client::new(&env, &token);
@@ -94,23 +119,24 @@ impl RiskPoolContract {
             (symbol_short!("pool"), symbol_short!("deposit")),
             (provider, amount, new_stake),
         );
+        Ok(())
     }
 
-    pub fn withdraw_liquidity(env: Env, provider: Address, amount: i128) {
+    pub fn withdraw_liquidity(env: Env, provider: Address, amount: i128) -> Result<(), RiskPoolError> {
         provider.require_auth();
 
         let stake = get_provider_stake(&env, &provider);
         if stake < amount {
-            panic!("Insufficient stake");
+            return Err(RiskPoolError::InsufficientStake);
         }
 
         let avail = get_available_capital(&env);
         if avail < amount {
-            panic!("Insufficient available capital in pool");
+            return Err(RiskPoolError::InsufficientPoolFunds);
         }
 
         let token: Address = env.storage().instance().get(&DataKey::Token)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
+            .ok_or(RiskPoolError::NotInitialized)?;
         let client = soroban_sdk::token::Client::new(&env, &token);
         client.transfer(&env.current_contract_address(), &provider, &amount);
 
@@ -127,20 +153,21 @@ impl RiskPoolContract {
             (symbol_short!("pool"), symbol_short!("withdraw")),
             (provider, amount, new_stake),
         );
+        Ok(())
     }
 
-    pub fn payout_claim(env: Env, recipient: Address, amount: i128) {
-        let admin = get_admin(&env);
-        admin.require_auth();
+    pub fn payout_claim(env: Env, recipient: Address, amount: i128) -> Result<(), RiskPoolError> {
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
 
         // #410: Verify available capital before payout
         let avail = get_available_capital(&env);
         if avail < amount {
-            panic!("Insufficient pool funds for payout");
+            return Err(RiskPoolError::InsufficientPoolFunds);
         }
 
         let token: Address = env.storage().instance().get(&DataKey::Token)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
+            .ok_or(RiskPoolError::NotInitialized)?;
         let client = soroban_sdk::token::Client::new(&env, &token);
         client.transfer(&env.current_contract_address(), &recipient, &amount);
 
@@ -155,11 +182,48 @@ impl RiskPoolContract {
             (symbol_short!("pool"), symbol_short!("payout")),
             (recipient, amount, new_available),
         );
+        Ok(())
     }
-}
 
-#[contractimpl]
-impl RiskPoolContract {
+    /// Absorb a slashed provider stake into the pool (#601).
+    ///
+    /// Called by the governance contract when a slashing proposal executes. The
+    /// slashed portion of the target's personal stake is forfeited to the pool's
+    /// collectively-available capital: the target can no longer withdraw it, and
+    /// it becomes available to cover claims. The tokens are already held by the
+    /// pool (they were transferred in at `deposit_liquidity` time), so this is a
+    /// pure reallocation and moves no tokens.
+    ///
+    /// Gated on the `Governance` role, mirroring `payout_claim`'s role check.
+    pub fn absorb_slash(env: Env, target: Address, amount: i128) -> Result<(), RiskPoolError> {
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Governance);
+
+        if amount <= 0 {
+            return Err(RiskPoolError::InvalidAmount);
+        }
+
+        let stake = get_provider_stake(&env, &target);
+        if stake < amount {
+            return Err(RiskPoolError::InsufficientStake);
+        }
+
+        // Reduce the target's personal stake; the forfeited amount stays in the
+        // pool as collectively-available capital.
+        let new_stake = stake - amount;
+        env.storage().persistent().set(&DataKey::ProviderStake(target.clone()), &new_stake);
+
+        let new_available = get_available_capital(&env) + amount;
+        env.storage().instance().set(&DataKey::AvailableCapital, &new_available);
+
+        // #601: structured event for the slashed-stake credit
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("slashed")),
+            (target, amount, new_available),
+        );
+        Ok(())
+    }
+
     pub fn get_pool_stats(env: Env) -> PoolStats {
         PoolStats {
             total_capital: get_total_capital(&env),
@@ -170,5 +234,84 @@ impl RiskPoolContract {
 
     pub fn get_provider_info(env: Env, provider: Address) -> i128 {
         get_provider_stake(&env, &provider)
+    }
+
+    pub fn migrate(env: Env, admin: Address, to_version: StorageVersion) -> Result<(), RiskPoolError> {
+        admin.require_auth();
+        access_control::require_role(&env, &admin, &AccessControlRole::Admin);
+
+        let current_version: StorageVersion = env
+            .storage()
+            .instance()
+            .get(&DataKey::Version)
+            .unwrap_or(StorageVersion::V1);
+
+        if current_version == to_version {
+            // Already at target version - idempotent
+            return Ok(());
+        }
+
+        if to_version < current_version {
+            return Err(RiskPoolError::AlreadyInitialized);
+        }
+
+        match (current_version, to_version) {
+            (StorageVersion::V1, StorageVersion::V2) => {
+                // Migration V1 -> V2: Add LockedCapital field with default value
+                if !env.storage().instance().has(&DataKey::LockedCapital) {
+                    env.storage().instance().set(&DataKey::LockedCapital, &0i128);
+                }
+                env.storage().instance().set(&DataKey::Version, &StorageVersion::V2);
+            }
+            _ => return Err(RiskPoolError::AlreadyInitialized),
+        }
+
+        env.events()
+            .publish((symbol_short!("pool"), symbol_short!("migrated")), to_version);
+        Ok(())
+    }
+}
+
+#[contractimpl]
+impl RiskPoolContract {
+    pub fn version(env: Env) -> StorageVersion {
+        env.storage()
+            .instance()
+            .get(&DataKey::Version)
+            .unwrap_or(StorageVersion::V1)
+    }
+
+    pub fn get_locked_capital(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::LockedCapital)
+            .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Env, Address};
+
+    fn setup() -> (Env, Address, Address) {
+        let env = Env::default();
+        let contract = env.register_contract(None, RiskPoolContract);
+        let admin = Address::generate(&env);
+        let token = Address::generate(&env);
+        env.mock_all_auths();
+        env.as_contract(&contract, || {
+            RiskPoolContract::initialize(env.clone(), admin.clone(), token, 100).unwrap();
+        });
+        (env, contract, admin)
+    }
+
+    #[test]
+    fn test_initialize_sets_admin_role() {
+        let (env, contract, admin) = setup();
+        env.as_contract(&contract, || {
+            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
+        });
     }
 }

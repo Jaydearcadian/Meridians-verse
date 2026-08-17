@@ -1,46 +1,52 @@
-'use client';
-
-import { motion } from 'framer-motion';
-import { containerVariants } from '@/lib/animations/variants';
-import { PetProgression } from './focus/PetProgression';
-import { TimerSelector } from './focus/TimerSelector';
-import { StreakDisplay } from './focus/StreakDisplay';
-import { SuperchargeTiers } from './focus/SuperchargeTiers';
+/**
+ * FocusSection — React Server Component shell.
+ *
+ * The section heading and layout skeleton are rendered on the server for
+ * SEO and a fast first paint (no hydration cost).  The four interactive
+ * sub-components (PetProgression, TimerSelector, StreakDisplay,
+ * SuperchargeTiers) are heavy framer-motion clients; they are deferred
+ * via React.Suspense + dynamic() in LazySections so their JS is excluded
+ * from the initial bundle and loaded only when the browser is ready.
+ */
+import { Suspense } from 'react';
+import {
+  FocusInteractiveLazy,
+  SuperchargeTiersLazy,
+} from '@/components/sections/LazySections';
+import { SectionSkeleton } from '@/components/sections/SectionSkeleton';
+import { FocusProvider } from '@/context/FocusContext';
 
 export function FocusSection() {
   return (
-    <section id="focus" className="py-20 px-4 max-w-7xl mx-auto">
-      {/* Section heading */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6 }}
-        viewport={{ once: true }}
-        className="text-center mb-16"
+    <FocusProvider>
+      <section 
+        id="focus" 
+        className="py-20 px-4 max-w-7xl mx-auto"
+        style={{
+          contentVisibility: 'auto',
+          containIntrinsicSize: '0 800px',
+        }}
       >
-        <h2 className="text-4xl sm:text-5xl font-bold text-foreground mb-4">Focus Pillar</h2>
-        <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-          Nurture your productivity companion while earning rewards for staying focused.
-        </p>
-      </motion.div>
+        {/* Heading — SSR, zero JS, fast first paint */}
+        <div className="text-center mb-16">
+          <h2 className="text-4xl sm:text-5xl font-bold text-foreground mb-4">Focus Pillar</h2>
+          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+            Nurture your productivity companion while earning rewards for staying focused.
+          </p>
+        </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-        {/* Left — pet, timer, streaks */}
-        <motion.div
-          variants={containerVariants}
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true }}
-          className="space-y-8"
-        >
-          <PetProgression />
-          <TimerSelector />
-          <StreakDisplay />
-        </motion.div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+          {/* Left col — pet, timer, streaks — deferred via Suspense */}
+          <Suspense fallback={<SectionSkeleton variant="default" />}>
+            <FocusInteractiveLazy />
+          </Suspense>
 
-        {/* Right — supercharge tiers */}
-        <SuperchargeTiers />
-      </div>
-    </section>
+          {/* Right col — supercharge tiers — deferred via Suspense */}
+          <Suspense fallback={<SectionSkeleton variant="default" />}>
+            <SuperchargeTiersLazy />
+          </Suspense>
+        </div>
+      </section>
+    </FocusProvider>
   );
 }

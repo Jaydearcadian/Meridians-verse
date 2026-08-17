@@ -1,27 +1,39 @@
-import { Skeleton } from "@/components/ui/skeleton";
+import { SectionSkeleton } from '@/components/sections/SectionSkeleton';
 
-export default function RootLoadingSkeleton() {
+/**
+ * Root loading boundary — shown during full-page route transitions.
+ *
+ * Uses the existing SectionSkeleton components so the layout structure
+ * is identical to the final rendered page, preventing Cumulative Layout
+ * Shift (CLS). Each skeleton variant matches the height of the real
+ * section it is replacing.
+ *
+ * Strategy:
+ *  • Above-the-fold sections (Hero + FocusSection) are SSR'd with their
+ *    final markup — no skeleton needed.
+ *  • Below-the-fold sections are deferred via React.Suspense with
+ *    SectionSkeleton fallbacks already (see app/page.tsx).
+ *  • This loading state covers the brief interval before those Suspense
+ *    boundaries pick up, ensuring zero layout gaps.
+ */
+export default function RootLoading() {
   return (
-    <div className="w-full space-y-12 p-6 md:p-12">
-      {/* Skeleton Hero Layout Structure */}
-      <div className="space-y-4 max-w-3xl">
-        <Skeleton className="h-10 w-3/4 md:w-1/2" />
-        <Skeleton className="h-6 w-full" />
-        <Skeleton className="h-6 w-5/6" />
-      </div>
+    <div className="w-full">
+      {/* The Header is SSR'd immediately — no skeleton needed. */}
 
-      {/* 3 Section Cards Layout Grid */}
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-        {Array.from({ length: 3 }).map((_, index) => (
-          <div key={index} className="rounded-xl border border-border p-6 space-y-4">
-            <Skeleton className="h-6 w-1/3" />
-            <Skeleton className="h-24 w-full" />
-            <div className="flex gap-2">
-              <Skeleton className="h-8 w-20" />
-              <Skeleton className="h-8 w-20" />
-            </div>
-          </div>
-        ))}
+      {/* Mirrors the app/page.tsx Suspense boundary structure */}
+      <div className="space-y-24 pb-24">
+        {/* Stream section skeleton */}
+        <SectionSkeleton variant="chart" />
+
+        {/* Pool section skeleton */}
+        <SectionSkeleton variant="chart" />
+
+        {/* Features grid skeleton */}
+        <SectionSkeleton variant="grid" />
+
+        {/* CTA skeleton */}
+        <SectionSkeleton variant="cta" />
       </div>
     </div>
   );

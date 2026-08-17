@@ -13,6 +13,31 @@ use ink::storage::Mapping;
 use ink::env::Environment;
 use propchain_traits::*;
 use ml_pipeline::*;
+use scale::Encode;
+
+// Zero-knowledge proof of model execution — compiled with the `zk` feature.
+#[cfg(feature = "zk")]
+use ark_bn254::{Bn254, Fr};
+#[cfg(feature = "zk")]
+use ark_ff::PrimeField;
+#[cfg(feature = "zk")]
+use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, VerifyingKey};
+#[cfg(feature = "zk")]
+use ark_serialize::CanonicalDeserialize;
+#[cfg(feature = "zk")]
+use ark_snark::SNARK;
+
+/// Deserialize a compressed Groth16 verification key (zk feature only).
+#[cfg(feature = "zk")]
+fn deserialize_vk(bytes: &[u8]) -> core::result::Result<VerifyingKey<Bn254>, ()> {
+    VerifyingKey::<Bn254>::deserialize_compressed(bytes).map_err(|_| ())
+}
+
+/// Deserialize a compressed Groth16 proof (zk feature only).
+#[cfg(feature = "zk")]
+fn deserialize_proof(bytes: &[u8]) -> core::result::Result<Proof<Bn254>, ()> {
+    Proof::<Bn254>::deserialize_compressed(bytes).map_err(|_| ())
+}
 
 /// AI-powered property valuation engine
 #[ink::contract]
@@ -141,6 +166,10 @@ mod ai_valuation {
         bias_threshold: u32,
         /// Contract pause state
         paused: bool,
+        /// Hash commitment of the registered model weights (per model id)
+        model_commitments: Mapping<String, [u8; 32]>,
+        /// Groth16 verification keys for model-execution proofs (per model id)
+        model_vks: Mapping<String, VerificationKeyRecord>,
     }
 
     /// Events emitted by the AI Valuation Engine
@@ -159,6 +188,15 @@ mod ai_valuation {
         predicted_value: u128,
         confidence_score: u32,
         model_id: String,
+    }
+
+    #[ink(event)]
+    pub struct ModelExecutionVerified {
+        #[ink(topic)]
+        property_id: u64,
+        model_id: String,
+        predicted_value: u128,
+        timestamp: u64,
     }
 
     #[ink(event)]
@@ -214,6 +252,12 @@ mod ai_valuation {
         PredictionFailed,
         /// Invalid parameters
         InvalidParameters,
+        /// Zero-knowledge backend unavailable (contract built without `zk` feature)
+        ZkUnavailable,
+        /// Zero-knowledge proof verification failed
+        ZkVerificationFailed,
+        /// No verification key registered for this model
+        VerificationKeyNotFound,
     }
 
     impl AIValuationEngine {
@@ -238,6 +282,8 @@ mod ai_valuation {
                 feature_cache_ttl: 3600, // 1 hour
                 bias_threshold: 2000,  // 20% bias threshold
                 paused: false,
+                model_commitments: Mapping::default(),
+                model_vks: Mapping::default(),
             }
         }
         /// Set oracle contract address
@@ -671,6 +717,179 @@ mod ai_valuation {
             self.ab_tests.get(&test_id)
         }
 
+        /// Register the Groth16 verification key and weight commitment for a
+        /// model (admin only).
+        ///
+        /// The commitment is a hash of the off-chain model weights; it is bound
+        /// into the public inputs of every model-execution proof so that proofs
+        /// can be attributed to this exact model version without revealing the
+        /// weights.
+        #[ink(message)]
+        pub fn register_model_commitment(
+            &mut self,
+            model_id: String,
+            weights_commitment: [u8; 32],
+            serialized_vk: Vec<u8>,
+            vk_hash: [u8; 32],
+        ) -> Result<(), AIValuationError> {
+            self.ensure_admin()?;
+            self.ensure_not_paused()?;
+
+            // The model must exist so the key is bound to a registered model.
+            self.models
+                .get(&model_id)
+                .ok_or(AIValuationError::ModelNotFound)?;
+
+            if serialized_vk.is_empty() {
+                return Err(AIValuationError::InvalidParameters);
+            }
+
+            #[cfg(feature = "zk")]
+            {
+                deserialize_vk(&serialized_vk)
+                    .map_err(|_| AIValuationError::ZkVerificationFailed)?;
+            }
+
+            let existing = self.model_vks.get(&model_id);
+            let version = existing.as_ref().map(|r| r.version + 1).unwrap_or(1);
+
+            self.model_commitments.insert(&model_id, &weights_commitment);
+            self.model_vks.insert(
+                &model_id,
+                &VerificationKeyRecord {
+                    version,
+                    serialized_vk,
+                    vk_hash,
+                    is_active: true,
+                },
+            );
+
+            Ok(())
+        }
+
+        /// Get the weight commitment registered for a model.
+        #[ink(message)]
+        pub fn get_model_commitment(&self, model_id: String) -> Option<[u8; 32]> {
+            self.model_commitments.get(&model_id)
+        }
+
+        /// Get the verification key record registered for a model.
+        #[ink(message)]
+        pub fn get_model_vk(&self, model_id: String) -> Option<VerificationKeyRecord> {
+            self.model_vks.get(&model_id)
+        }
+
+        /// Verify a zero-knowledge proof of model execution.
+        ///
+        /// The prover runs the real model off-chain and produces a Groth16
+        /// proof that the prediction was computed from the registered weights
+        /// without revealing them. The single public input binds the statement
+        /// `(weights_commitment, feature_hash, predicted_value)` via
+        /// BLAKE2b-256. On success the attested prediction is recorded and
+        /// returned.
+        ///
+        /// Requires the `zk` feature; otherwise returns
+        /// [`AIValuationError::ZkUnavailable`].
+        #[ink(message)]
+        pub fn verify_model_execution_zk(
+            &mut self,
+            property_id: u64,
+            model_id: String,
+            predicted_value: u128,
+            feature_hash: [u8; 32],
+            proof_data: Vec<u8>,
+        ) -> Result<AIPrediction, AIValuationError> {
+            #[cfg(feature = "zk")]
+            {
+                self.ensure_not_paused()?;
+
+                let model = self
+                    .models
+                    .get(&model_id)
+                    .ok_or(AIValuationError::ModelNotFound)?;
+                let commitment = self
+                    .model_commitments
+                    .get(&model_id)
+                    .ok_or(AIValuationError::VerificationKeyNotFound)?;
+                let record = self
+                    .model_vks
+                    .get(&model_id)
+                    .ok_or(AIValuationError::VerificationKeyNotFound)?;
+                if !record.is_active {
+                    return Err(AIValuationError::VerificationKeyNotFound);
+                }
+
+                // Build the bound public input:
+                //   H(H(weights_commitment) || feature_hash || H(predicted_value))
+                let value_binding = self.bind_public_input(&predicted_value.encode());
+                let mut statement = Vec::new();
+                statement.extend_from_slice(&commitment);
+                statement.extend_from_slice(&feature_hash);
+                statement.extend_from_slice(&value_binding);
+                let public_input = self.bind_public_input(&statement);
+
+                let vk = deserialize_vk(&record.serialized_vk)
+                    .map_err(|_| AIValuationError::ZkVerificationFailed)?;
+                let proof = deserialize_proof(&proof_data)
+                    .map_err(|_| AIValuationError::ZkVerificationFailed)?;
+                let inputs: Vec<Fr> = vec![public_input]
+                    .iter()
+                    .map(|b| Fr::from_le_bytes_mod_order(b.as_slice()))
+                    .collect();
+                let pvk = PreparedVerifyingKey::from(vk);
+                let valid = Groth16::<Bn254>::verify_with_processed_vk(&pvk, &inputs, &proof)
+                    .map_err(|_| AIValuationError::ZkVerificationFailed)?;
+                if !valid {
+                    return Err(AIValuationError::ZkVerificationFailed);
+                }
+
+                // Record the attested prediction.
+                let uncertainty = predicted_value / 10;
+                let prediction = AIPrediction {
+                    predicted_value,
+                    confidence_score: model.accuracy_score,
+                    uncertainty_range: (
+                        predicted_value.saturating_sub(uncertainty),
+                        predicted_value + uncertainty,
+                    ),
+                    model_id: model.model_id.clone(),
+                    features_used: self
+                        .property_features
+                        .get(&property_id)
+                        .unwrap_or(PropertyFeatures {
+                            location_score: 0,
+                            size_sqm: 0,
+                            age_years: 0,
+                            condition_score: 0,
+                            amenities_score: 0,
+                            market_trend: 0,
+                            comparable_avg: 0,
+                            economic_indicators: 0,
+                        }),
+                    bias_score: 0,
+                    fairness_score: 10000,
+                };
+
+                let mut history = self.predictions.get(&property_id).unwrap_or_default();
+                history.push(prediction.clone());
+                self.predictions.insert(&property_id, &history);
+
+                self.env().emit_event(ModelExecutionVerified {
+                    property_id,
+                    model_id: model.model_id,
+                    predicted_value,
+                    timestamp: self.env().block_timestamp(),
+                });
+
+                Ok(prediction)
+            }
+            #[cfg(not(feature = "zk"))]
+            {
+                let _ = (property_id, model_id, predicted_value, feature_hash, proof_data);
+                Err(AIValuationError::ZkUnavailable)
+            }
+        }
+
         // Private helper methods
         /// Require the caller to be the engine admin before privileged state changes.
         fn ensure_admin(&self) -> Result<(), AIValuationError> {
@@ -686,6 +905,16 @@ mod ai_valuation {
                 return Err(AIValuationError::ContractPaused);
             }
             Ok(())
+        }
+
+        /// Hash a statement into the single 32-byte public input expected by
+        /// the off-chain prover (BLAKE2b-256 of the statement bytes).
+        fn bind_public_input(&self, statement: &[u8]) -> [u8; 32] {
+            use ink::env::hash::{Blake2x256, HashOutput};
+
+            let mut output = <Blake2x256 as HashOutput>::Type::default();
+            self.env().hash_bytes::<Blake2x256>(statement, &mut output);
+            output
         }
 
         /// Produce deterministic placeholder property features for local valuation flows.
