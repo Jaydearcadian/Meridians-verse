@@ -20,6 +20,9 @@ pub const GROTH16_BN254_PROOF_LEN: usize = 128;
 /// Upper bound on a serialized proof payload accepted by the on-chain verifier.
 pub const MAX_PROOF_LEN: usize = 1024;
 
+/// Minimum plausible proof payload length (rejects empty/trivial inputs).
+pub const MIN_PROOF_LEN: usize = 32;
+
 /// Maximum number of public inputs accepted for a Bn254 Groth16 proof.
 pub const MAX_PUBLIC_INPUTS: usize = 64;
 
@@ -57,7 +60,9 @@ pub fn is_canonical_field_element(bytes: &[u8; 32]) -> bool {
 
 /// Returns `true` when the proof payload is inside the accepted length window.
 pub fn validate_proof_payload(payload: &[u8]) -> bool {
-    !payload.is_empty() && payload.len() <= MAX_PROOF_LEN
+    !payload.is_empty()
+        && payload.len() >= MIN_PROOF_LEN
+        && payload.len() <= MAX_PROOF_LEN
 }
 
 /// Returns `true` when the public-input set is non-empty, bounded, and every
@@ -115,11 +120,12 @@ mod tests {
     #[test]
     fn vk_proof_roundtrip() {
         use ark_bn254::Fr;
-        use ark_ff::{Field, PrimeField, UniformRand};
+        use ark_ff::{Field, UniformRand};
         use ark_groth16::{create_random_proof, generate_random_parameters_with_reduction};
         use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
         use ark_std::test_rng;
 
+        #[derive(Clone)]
         struct SqrtCircuit<F: Field> {
             public: Option<F>,
             secret: Option<F>,

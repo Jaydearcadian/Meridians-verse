@@ -452,3 +452,102 @@ fn deploy_property_token_contract(contract_id: AccountId, initial_supply: u64) -
 fn deploy_escrow_contract(contract_id: AccountId) -> AdvancedEscrow {
     AdvancedEscrow::new()
 }
+
+// =============================================================================
+// ZERO-KNOWLEDGE PROOF MALFORMED-INPUT HANDLING (Issue #629)
+// =============================================================================
+//
+// These fuzz tests exercise the shared proof-payload validation helpers in
+// `stellar_insured_lib::zk` — the same rules the on-chain Groth16 verifiers use
+// as a pre-deserialization gate. Cryptographic soundness comes from the pairing
+// checks inside the contracts; these tests assert that obviously malformed
+// input is rejected without panics.
+
+use stellar_insured_lib::zk::{
+    is_canonical_field_element, validate_proof_payload, validate_public_inputs,
+    GROTH16_BN254_PROOF_LEN, MAX_PROOF_LEN,
+};
+
+/// Fuzz strategy for arbitrary proof payload bytes.
+fn fuzz_zk_payload_strategy() -> impl Strategy<Value = Vec<u8>> {
+    prop::collection::vec(any::<u8>(), 0..2048)
+}
+
+/// Fuzz strategy for arbitrary 32-byte field-element encodings.
+fn fuzz_zk_field_bytes_strategy() -> impl Strategy<Value = [u8; 32]> {
+    prop::array::array32(any::<u8>())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    /// Malformed proof payloads must never panic the shared gate, and
+    /// out-of-window lengths must always be rejected.
+    #[test]
+    fn fuzz_zk_malformed_proof_payloads(payload in fuzz_zk_payload_strategy()) {
+        let accepted = validate_proof_payload(&payload);
+        if payload.is_empty() || payload.len() > MAX_PROOF_LEN {
+            prop_assert!(!accepted, "empty/oversized proof payload must be rejected");
+        }
+        // A canonical-length (128-byte) payload always passes the gate.
+        let canonical = vec![0u8; GROTH16_BN254_PROOF_LEN];
+        prop_assert!(validate_proof_payload(&canonical));
+    }
+
+    /// Arbitrary field encodings must not panic the canonicality check.
+    #[test]
+    fn fuzz_zk_field_element_canonicality(bytes in fuzz_zk_field_bytes_strategy()) {
+        let _ = is_canonical_field_element(&bytes); // must never panic
+        // The all-ones encoding is >= the Bn254 modulus and must be rejected.
+        prop_assert!(!is_canonical_field_element(&[0xffu8; 32]));
+        // Canonical elements are always accepted by the aggregate validator.
+        if is_canonical_field_element(&bytes) {
+            prop_assert!(validate_public_inputs(&[bytes]));
+        }
+    }
+
+    /// Public-input arrays with too many elements must be rejected.
+    #[test]
+    fn fuzz_zk_public_input_count(count in 0usize..70usize) {
+        let inputs = vec![[0u8; 32]; count];
+        let accepted = validate_public_inputs(&inputs);
+        prop_assert_eq!(accepted, count > 0 && count <= 64);
+    }
+}
+
+/// Deterministic boundary cases for the proof-payload gate.
+#[test]
+fn zk_proof_payload_boundaries() {
+    assert!(!validate_proof_payload(&[]));
+    assert!(validate_proof_payload(&[0u8; GROTH16_BN254_PROOF_LEN]));
+    assert!(validate_proof_payload(&[0u8; MAX_PROOF_LEN]));
+    assert!(!validate_proof_payload(&[0u8; MAX_PROOF_LEN + 1]));
+}
+
+/// Deterministic boundary cases for the canonical field-element check.
+#[test]
+fn zk_canonical_field_element_boundaries() {
+    assert!(is_canonical_field_element(&[0u8; 32]));
+    assert!(!is_canonical_field_element(&[0xffu8; 32]));
+
+    // Exactly the Bn254 modulus -> non-canonical.
+    let mut modulus = [0u8; 32];
+    for (i, limb) in [
+        0x3c20_8c16_d87c_fd47u64,
+        0x9781_6a91_6871_ca8du64,
+        0xb850_45b6_8181_585du64,
+        0x3064_4e72_e131_a029u64,
+    ]
+    .iter()
+    .enumerate()
+    {
+        for j in 0..8 {
+            modulus[i * 8 + j] = ((limb >> (8 * j)) & 0xff) as u8;
+        }
+    }
+    assert!(!is_canonical_field_element(&modulus));
+
+    // modulus - 1 -> canonical (largest valid element).
+    modulus[0] = modulus[0].wrapping_sub(1);
+    assert!(is_canonical_field_element(&modulus));
+}

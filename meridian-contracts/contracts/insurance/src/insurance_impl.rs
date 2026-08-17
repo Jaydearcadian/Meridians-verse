@@ -54,6 +54,59 @@
                 min_premium_amount: 1_000_000,     // Minimum premium (adjust based on token decimals)
                 oracle_contract: None,
                 fee_manager: None,
+                zk_compliance_contract: None,
+            }
+        }
+
+        /// Set the ZK compliance contract used to gate policyholders on
+        /// verified zero-knowledge proofs (admin only).
+        #[ink(message)]
+        pub fn set_zk_compliance_contract(
+            &mut self,
+            zk_contract: AccountId,
+        ) -> Result<(), InsuranceError> {
+            self.ensure_role(Role::Admin)?;
+            self.zk_compliance_contract = Some(zk_contract);
+            Ok(())
+        }
+
+        /// Get the configured ZK compliance contract address.
+        #[ink(message)]
+        pub fn get_zk_compliance_contract(&self) -> Option<AccountId> {
+            self.zk_compliance_contract
+        }
+
+        /// Check whether `account` holds a valid, unexpired zero-knowledge
+        /// proof of the given type on the configured compliance contract.
+        ///
+        /// Returns `None` when no ZK compliance contract is configured or when
+        /// the cross-contract query fails; otherwise returns the compliance
+        /// verdict. This allows policy issuance flows to gate on privacy-
+        /// preserving attestations (e.g. accredited-investor status) without
+        /// revealing the underlying data.
+        #[ink(message)]
+        pub fn is_zk_compliant(&self, account: AccountId, proof_type: ZkProofType) -> Option<bool> {
+            use ink::env::call::{build_call, ExecutionInput, Selector};
+
+            let zk_contract = self.zk_compliance_contract?;
+            let result = build_call::<ink::env::DefaultEnvironment>()
+                .call(zk_contract)
+                .ref_time_limit(0)
+                .proof_size_limit(0)
+                .storage_deposit_limit(None)
+                .exec_input(
+                    ExecutionInput::new(Selector::new(ink::selector_bytes!(
+                        "is_zk_proof_valid"
+                    )))
+                    .push_arg(&account)
+                    .push_arg(&proof_type),
+                )
+                .returns::<bool>()
+                .try_invoke();
+
+            match result {
+                Ok(Ok(Ok(valid))) => Some(valid),
+                _ => None,
             }
         }
 

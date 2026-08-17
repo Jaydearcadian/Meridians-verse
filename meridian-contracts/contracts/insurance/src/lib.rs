@@ -28,7 +28,7 @@ mod propchain_insurance {
         UnderwritingCriteria, REWARD_PRECISION,
     };
 
-    use propchain_traits::{DynamicFeeProvider, FeeOperation};
+    use propchain_traits::{DynamicFeeProvider, FeeOperation, ZkProofType};
 
     // =========================================================================
     // EVENTS  (single source of truth: events.rs; included here so ink! macros
@@ -140,6 +140,9 @@ mod propchain_insurance {
 
         // Fee manager contract for dynamic fees
         fee_manager: Option<AccountId>,
+
+        // ZK compliance contract used to gate policyholders on verified proofs
+        zk_compliance_contract: Option<AccountId>,
     }
 
     // =========================================================================

@@ -342,7 +342,19 @@ mod propchain_oracle {
             valuation: PropertyValuation,
         ) -> Result<(), OracleError> {
             self.ensure_admin()?;
+            self.update_property_valuation_inner(property_id, valuation)
+        }
 
+        /// Core valuation update logic without the admin gate.
+        ///
+        /// Used by the admin message above and by ZK-attested submissions
+        /// (`submit_zk_valuation`), which are gated by cryptographic proof
+        /// verification instead of admin trust.
+        fn update_property_valuation_inner(
+            &mut self,
+            property_id: u64,
+            valuation: PropertyValuation,
+        ) -> Result<(), OracleError> {
             // Validate valuation
             if valuation.valuation == 0 {
                 return Err(OracleError::InvalidValuation);
@@ -756,7 +768,8 @@ mod propchain_oracle {
                 valuation_method: ValuationMethod::Hybrid,
                 confirmed_at_block: None,
             };
-            self.update_property_valuation(property_id, property_valuation)?;
+            // Bypass the admin gate: the cryptographic proof is the authority.
+            self.update_property_valuation_inner(property_id, property_valuation)?;
 
             self.env().emit_event(ZkValuationAttested {
                 property_id,
