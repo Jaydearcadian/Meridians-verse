@@ -64,8 +64,23 @@ Non-canonical encodings are rejected to prevent input malleability.
 Every contract entry point binds its statement into a **single public input**:
 
 ```
-public_input = BLAKE2b-256( SCALE(statement) )
+public_input = BLAKE2b-256( SCALE(statement) ) mod r
 ```
+
+where `r` is the Bn254 scalar field order
+(`21888242871839275222246405745257275088548364400416034343698204186575808495617`).
+The raw 32-byte hash is reduced modulo `r` — the exact semantics of
+`ark_ff::PrimeField::from_le_bytes_mod_order` followed by canonical (compressed)
+serialization, which is how the off-chain prover derives the public input.
+
+> **Why the reduction matters.** A uniform 32-byte hash exceeds `r` with
+> probability ≈ 81%, so the raw binding almost never equals the public input
+> stored in a proof. Every on-chain path that compares or gates public inputs
+> (the oracle's `submit_zk_valuation` binding check and zk-compliance's
+> canonicality gate) must apply the same reduction. The pure `reduce_mod_bn254`
+> helper is implemented in `contracts/lib/src/zk.rs` and mirrored in
+> `contracts/zk-compliance/src/verification_keys.rs` and the oracle contract;
+> the zk-compliance copy is cross-checked against ark in a `zk`-feature test.
 
 The statements per entry point are:
 
@@ -150,8 +165,8 @@ curve/QR headaches. It proves knowledge of a decomposition of the bound value,
    `ark_relations::r1cs::ConstraintSynthesizer<Fr>` that proves the real
    statement (e.g. `age >= threshold`, `income >= minimum`, `y == model(x)` for
    committed weights).
-2. Keep the **single public input = BLAKE2b-256(SCALE(statement))** convention
-   so the on-chain binding checks keep working.
+2. Keep the **single public input = BLAKE2b-256(SCALE(statement)) mod r**
+   convention so the on-chain binding checks keep working.
 3. Regenerate keys with a production setup procedure (ceremony / designated
    issuer), never the demo `StdRng::from_seed`.
 
@@ -209,8 +224,9 @@ proof `Verified` when verification succeeds; otherwise the proof is stored as
 submit_zk_valuation(property_id, valuation, confidence_score, attestation: ZkProofData)
 ```
 
-- Computes `binding = BLAKE2b-256((property_id, valuation).encode())` and
-  requires `attestation.public_inputs == [binding]` (local, no gas spent).
+- Computes `binding = BLAKE2b-256((property_id, valuation).encode()) mod r`
+  (same reduction the prover applies) and requires
+  `attestation.public_inputs == [binding]` (local, no gas spent).
 - Calls `verify_zk_proof_data` on the configured compliance contract.
 - On success, stores a `ZkAttestedValuation` and routes the valuation through
   the standard pipeline **without the admin gate** — the cryptographic proof is
@@ -239,7 +255,7 @@ privacy-preserving attestations without exposing the underlying data.
 
 - `contracts/lib/src/zk.rs`, `contracts/zk-compliance/src/verification_keys.rs`:
   pure validation helpers with boundary tests (payload window, canonical field
-  elements around the Bn254 modulus).
+  elements around the Bn254 modulus, mod-`r` reduction properties).
 - `contracts/zk-compliance/src/verification_keys.rs` (feature `zk`):
   full `setup → prove → serialize → deserialize → verify` round-trip test.
 - `security-tests/src/zk_tests.rs`: adversarial proof tests — malformed

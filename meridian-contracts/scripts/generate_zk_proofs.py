@@ -181,6 +181,7 @@ def main() -> int:
 
     print(f"✓ artifacts in {out}/")
     print(f"  binding (BLAKE2b-256 of statement) : {manifest['binding_hex']}")
+    print(f"  public input (binding mod r)       : {manifest['public_input_hex']}")
     print(f"  vk hash                            : 0x{manifest['vk_hash_hex']}")
     print(f"  vk size                            : {manifest['vk_len']} bytes")
     print(f"  proof size                         : {manifest['proof_len']} bytes")
@@ -194,9 +195,11 @@ def main() -> int:
     print("  )")
 
     if args.proof_type == "oracle":
+        # The on-chain binding check compares against the REDUCED public input
+        # (binding mod r), not the raw BLAKE2b-256 hash — use public_input_hex.
         print("\nSubmit the attestation to the oracle:")
         print("  submit_zk_valuation(property_id, valuation, confidence, ZkProofData {")
-        print(f"    proof_type: {args.proof_type}, public_inputs: [{manifest['binding_hex']}],")
+        print(f"    proof_type: {args.proof_type}, public_inputs: [{manifest['public_input_hex']}],")
         print(f"    proof_data: 0x{(out / 'proof.bin').read_bytes().hex()}, ...")
         print("  })")
     return 0

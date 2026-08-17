@@ -1261,13 +1261,19 @@ mod zk_compliance {
         }
 
         /// Hash a statement into the single 32-byte public input expected by
-        /// the off-chain prover (BLAKE2b-256 of the SCALE-encoded statement).
+        /// the off-chain prover.
+        ///
+        /// The public input is `BLAKE2b-256(statement) mod r`, where `r` is the
+        /// Bn254 scalar field order — matching the prover's
+        /// `Fr::from_le_bytes_mod_order(BLAKE2b-256(statement))` exactly so the
+        /// canonicality gate and proof verification agree byte-for-byte (a raw
+        /// hash exceeds `r` with probability ≈ 81%).
         fn bind_public_input(&self, statement: &[u8]) -> [u8; 32] {
             use ink::env::hash::{Blake2x256, HashOutput};
 
             let mut output = <Blake2x256 as HashOutput>::Type::default();
             self.env().hash_bytes::<Blake2x256>(statement, &mut output);
-            output
+            verification_keys::reduce_mod_bn254(&output)
         }
 
         /// Submit a proof and verify it with the real backend before marking it

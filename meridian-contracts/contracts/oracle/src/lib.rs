@@ -100,7 +100,8 @@ mod propchain_oracle {
         pub property_id: u64,
         pub valuation: u128,
         pub proof_type: ZkProofType,
-        /// Binding public input (BLAKE2b-256 of the SCALE-encoded statement)
+        /// Binding public input (BLAKE2b-256 of the SCALE-encoded statement,
+        /// reduced mod the Bn254 scalar field order)
         pub statement_hash: [u8; 32],
         pub attested_at: u64,
     }
@@ -1027,13 +1028,20 @@ mod propchain_oracle {
         }
 
         /// Hash a statement into the single 32-byte public input expected by
-        /// the off-chain prover (BLAKE2b-256 of the SCALE-encoded statement).
+        /// the off-chain prover.
+        ///
+        /// The public input is `BLAKE2b-256(statement) mod r`, where `r` is the
+        /// Bn254 scalar field order — matching the prover's
+        /// `from_le_bytes_mod_order(BLAKE2b-256(statement))` exactly (a raw
+        /// hash exceeds `r` with probability ≈ 81%, so the reduction is
+        /// required for the comparison against `attestation.public_inputs[0]`
+        /// to succeed).
         fn bind_public_input(&self, statement: &[u8]) -> [u8; 32] {
             use ink::env::hash::{Blake2x256, HashOutput};
 
             let mut output = <Blake2x256 as HashOutput>::Type::default();
             self.env().hash_bytes::<Blake2x256>(statement, &mut output);
-            output
+            reduce_mod_bn254(&output)
         }
 
         /// Deterministic fallback price used when an external oracle feed is
@@ -1320,6 +1328,70 @@ mod propchain_oracle {
         fn clear_pending_request(&mut self, property_id: u64) {
             self.pending_requests.remove(&property_id);
         }
+    }
+
+    /// Reduce a 32-byte little-endian value modulo the Bn254 scalar field
+    /// order, returning the canonical 32-byte little-endian representation.
+    ///
+    /// Mirrors `contracts/lib/src/zk.rs::reduce_mod_bn254` and the copy in
+    /// `contracts/zk-compliance/src/verification_keys.rs` (this contract has
+    /// no arkworks dependency). Matches `ark_ff::PrimeField::from_le_bytes_mod_order`
+    /// + compressed serialization, which is how the off-chain prover derives
+    /// the public input from the statement binding.
+    fn reduce_mod_bn254(bytes: &[u8; 32]) -> [u8; 32] {
+        // Bn254 scalar field order as little-endian u64 limbs.
+        const MODULUS_LE: [u64; 4] = [
+            0x3c20_8c16_d87c_fd47,
+            0x9781_6a91_6871_ca8d,
+            0xb850_45b6_8181_585d,
+            0x3064_4e72_e131_a029,
+        ];
+
+        // Interpret the input as a 256-bit little-endian integer.
+        let mut h = [0u64; 4];
+        for (i, limb) in h.iter_mut().enumerate() {
+            let mut acc = 0u64;
+            for j in 0..8 {
+                acc |= (bytes[i * 8 + j] as u64) << (8 * j);
+            }
+            *limb = acc;
+        }
+
+        // H < 2^256 and the modulus is > 2^253, so this subtracts at most a
+        // handful of times.
+        loop {
+            // Is h >= modulus? (compare from the most significant limb down)
+            let mut ge = true;
+            for i in (0..4).rev() {
+                if h[i] > MODULUS_LE[i] {
+                    break;
+                }
+                if h[i] < MODULUS_LE[i] {
+                    ge = false;
+                    break;
+                }
+            }
+            if !ge {
+                break;
+            }
+            // h -= modulus
+            let mut borrow = false;
+            for i in 0..4 {
+                let (d1, b1) = h[i].overflowing_sub(MODULUS_LE[i]);
+                let (d2, b2) = d1.overflowing_sub(borrow as u64);
+                h[i] = d2;
+                borrow = b1 || b2;
+            }
+        }
+
+        // Write the reduced value back as 32 little-endian bytes.
+        let mut out = [0u8; 32];
+        for (i, limb) in h.iter().enumerate() {
+            for j in 0..8 {
+                out[i * 8 + j] = ((limb >> (8 * j)) & 0xff) as u8;
+            }
+        }
+        out
     }
 
     /// Implementation of the Oracle trait from propchain-traits

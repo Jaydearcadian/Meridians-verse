@@ -39,14 +39,7 @@ const BN254_MODULUS_LIMBS_LE: [u64; 4] = [
 /// Returns `true` when the 32 little-endian bytes encode a canonical Bn254
 /// scalar field element (strictly less than the group order).
 pub fn is_canonical_field_element(bytes: &[u8; 32]) -> bool {
-    let mut limbs = [0u64; 4];
-    for (i, limb) in limbs.iter_mut().enumerate() {
-        let mut acc = 0u64;
-        for j in 0..8 {
-            acc |= (bytes[i * 8 + j] as u64) << (8 * j);
-        }
-        *limb = acc;
-    }
+    let limbs = limbs_from_bytes_le(bytes);
     for i in (0..4).rev() {
         if limbs[i] < BN254_MODULUS_LIMBS_LE[i] {
             return true;
@@ -56,6 +49,78 @@ pub fn is_canonical_field_element(bytes: &[u8; 32]) -> bool {
         }
     }
     false
+}
+
+/// Reduce a 32-byte little-endian value modulo the Bn254 scalar field order,
+/// returning the canonical 32-byte little-endian representation.
+///
+/// Mirrors `contracts/lib/src/zk.rs::reduce_mod_bn254` (and the oracle
+/// contract's inline copy). It matches the off-chain prover's public-input
+/// derivation exactly: `ark_ff::PrimeField::from_le_bytes_mod_order` followed
+/// by compressed serialization. A uniform 32-byte hash exceeds the field order
+/// with probability ≈ 81%, so binding checks must reduce before comparing or
+/// gating public inputs.
+pub fn reduce_mod_bn254(bytes: &[u8; 32]) -> [u8; 32] {
+    let mut h = limbs_from_bytes_le(bytes);
+    // H < 2^256 and the modulus is > 2^253, so this subtracts at most a
+    // handful of times.
+    loop {
+        if !limbs_ge(&h, &BN254_MODULUS_LIMBS_LE) {
+            break;
+        }
+        h = limbs_sub(&h, &BN254_MODULUS_LIMBS_LE);
+    }
+    limbs_to_bytes_le(&h)
+}
+
+/// Interpret 32 little-endian bytes as four little-endian u64 limbs.
+fn limbs_from_bytes_le(bytes: &[u8; 32]) -> [u64; 4] {
+    let mut limbs = [0u64; 4];
+    for (i, limb) in limbs.iter_mut().enumerate() {
+        let mut acc = 0u64;
+        for j in 0..8 {
+            acc |= (bytes[i * 8 + j] as u64) << (8 * j);
+        }
+        *limb = acc;
+    }
+    limbs
+}
+
+/// Serialize four little-endian u64 limbs back into 32 little-endian bytes.
+fn limbs_to_bytes_le(limbs: &[u64; 4]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (i, limb) in limbs.iter().enumerate() {
+        for j in 0..8 {
+            out[i * 8 + j] = ((limb >> (8 * j)) & 0xff) as u8;
+        }
+    }
+    out
+}
+
+/// Compare two 256-bit little-endian limb arrays: `a >= b`.
+fn limbs_ge(a: &[u64; 4], b: &[u64; 4]) -> bool {
+    for i in (0..4).rev() {
+        if a[i] > b[i] {
+            return true;
+        }
+        if a[i] < b[i] {
+            return false;
+        }
+    }
+    true // equal
+}
+
+/// Subtract two 256-bit little-endian limb arrays (requires `a >= b`).
+fn limbs_sub(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+    let mut out = [0u64; 4];
+    let mut borrow = false;
+    for i in 0..4 {
+        let (d1, b1) = a[i].overflowing_sub(b[i]);
+        let (d2, b2) = d1.overflowing_sub(borrow as u64);
+        out[i] = d2;
+        borrow = b1 || b2;
+    }
+    out
 }
 
 /// Returns `true` when the proof payload is inside the accepted length window.
@@ -90,8 +155,10 @@ pub fn deserialize_vk(bytes: &[u8]) -> core::result::Result<VerifyingKey<Bn254>,
     VerifyingKey::<Bn254>::deserialize_compressed(bytes).map_err(|_| ())
 }
 
-/// Serialize a Groth16 verification key in compressed form.
+/// Serialize a Groth16 verification key in compressed form (test helper — the
+/// contract only needs the deserializer).
 #[cfg(feature = "zk")]
+#[cfg(test)]
 pub fn serialize_vk(vk: &VerifyingKey<Bn254>) -> Vec<u8> {
     let mut out = Vec::new();
     vk.serialize_compressed(&mut out).expect("serializing a valid verification key cannot fail");
@@ -104,8 +171,9 @@ pub fn deserialize_proof(bytes: &[u8]) -> core::result::Result<Proof<Bn254>, ()>
     Proof::<Bn254>::deserialize_compressed(bytes).map_err(|_| ())
 }
 
-/// Serialize a Groth16 proof in compressed form.
+/// Serialize a Groth16 proof in compressed form (test helper).
 #[cfg(feature = "zk")]
+#[cfg(test)]
 pub fn serialize_proof(proof: &Proof<Bn254>) -> Vec<u8> {
     let mut out = Vec::new();
     proof.serialize_compressed(&mut out).expect("serializing a valid proof cannot fail");
@@ -180,5 +248,53 @@ mod tests {
         )
         .expect("verification should not error");
         assert!(valid);
+    }
+
+    /// The pure mod-*r* reduction must agree byte-for-byte with ark's
+    /// `from_le_bytes_mod_order` + compressed serialization, including for
+    /// non-canonical inputs (the common case for raw binding hashes).
+    #[test]
+    fn pure_reduction_matches_ark() {
+        use ark_bn254::Fr;
+        use ark_ff::{PrimeField, UniformRand};
+        use ark_serialize::CanonicalSerialize;
+
+        // Deterministic boundary cases plus random values.
+        let mut cases: Vec<[u8; 32]> = vec![[0u8; 32], [0xffu8; 32]];
+        let mut modulus = [0u8; 32];
+        for (i, limb) in BN254_MODULUS_LIMBS_LE.iter().enumerate() {
+            for j in 0..8 {
+                modulus[i * 8 + j] = ((limb >> (8 * j)) & 0xff) as u8;
+            }
+        }
+        cases.push(modulus);
+        cases.push(reduce_mod_bn254(&[0xabu8; 32]));
+        for _ in 0..16 {
+            let mut ser = Vec::new();
+            Fr::rand(&mut test_rng())
+                .serialize_compressed(&mut ser)
+                .expect("serialize");
+            let mut b = [0u8; 32];
+            b.copy_from_slice(&ser[..32]);
+            cases.push(b);
+        }
+
+        for bytes in cases {
+            let reduced = reduce_mod_bn254(&bytes);
+            assert!(
+                is_canonical_field_element(&reduced),
+                "reduction must always produce a canonical element"
+            );
+            let ark_reduced = Fr::from_le_bytes_mod_order(&bytes);
+            let mut ark_bytes = Vec::new();
+            ark_reduced
+                .serialize_compressed(&mut ark_bytes)
+                .expect("serialize");
+            assert_eq!(
+                reduced.as_slice(),
+                ark_bytes.as_slice(),
+                "pure reduction diverges from ark for input {bytes:?}"
+            );
+        }
     }
 }
