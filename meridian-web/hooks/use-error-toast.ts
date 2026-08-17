@@ -1,23 +1,24 @@
-import { useCallback } from "react";
-import { toast } from "sonner";
+import { useCallback } from 'react'
+import { toast } from 'sonner'
+import { getErrorCategory, getRecoveryCopy, type ErrorCategory } from '@/lib/error-recovery'
 
-interface OperationalError {
-  message: string;
-  code?: string | number;
+interface ErrorToastOptions {
+  category?: ErrorCategory
+  scope?: string
 }
 
 export function useErrorToast() {
-  const triggerErrorToast = useCallback((error: unknown, fallbackCode = "ERR_UNKNOWN") => {
-    const err = error as OperationalError;
-    const message = err?.message || "An unhandled interface operation failed.";
-    const code = err?.code || fallbackCode;
+  const triggerErrorToast = useCallback((error: unknown, options: ErrorToastOptions = {}) => {
+    const category = options.category ?? getErrorCategory(error, navigator.onLine)
+    const copy = getRecoveryCopy(category)
 
-    toast.error(`Error context [${code}]`, {
-      description: message,
+    toast.error(copy.title, {
+      id: `error-${options.scope ?? category}`,
+      description: copy.toastDescription,
       duration: 5000,
       closeButton: true,
-    });
-  }, []);
+    })
+  }, [])
 
-  return { triggerErrorToast };
+  return { triggerErrorToast }
 }
