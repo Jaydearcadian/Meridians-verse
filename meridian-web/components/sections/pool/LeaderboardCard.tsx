@@ -254,6 +254,7 @@ export function LeaderboardCard() {
                 <p className="font-semibold text-foreground">{entry.name}</p>
                 <p className="text-sm text-muted-foreground">{entry.xp} XP</p>
               </div>
+              <Skeleton className="h-4 w-16" />
             </div>
             <div className="text-right">
               <p className="font-semibold text-primary">{entry.yield}</p>
