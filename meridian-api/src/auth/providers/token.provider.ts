@@ -8,6 +8,7 @@ import { User } from 'src/users/user.entity';
 import { RefreshToken } from '../entities/refresh-token.entity';
 import { HashingProvider } from './hashing';
 import { randomUUID } from 'crypto';
+import { CryptoProvider } from 'src/crypto/providers/crypto.provider';
 
 // seperation of concern
 // this was generated to create access token and refresh token so we can use in signInProvider
@@ -26,6 +27,10 @@ export class GenerateTokenProvider {
     private readonly refreshTokenRepository: Repository<RefreshToken>,
 
     private readonly hashingProvider: HashingProvider,
+
+    // Envelope encryption (issue #631): persists an encrypted copy of the
+    // refresh token alongside the bcrypt hash.
+    private readonly cryptoProvider: CryptoProvider,
   ) {}
 
   // we want to generate to types of token which need payload
@@ -56,6 +61,12 @@ export class GenerateTokenProvider {
       this.SignToken(user.id, this.jwtconfiguration.Rttl, { jti }),
     ]);
 
+    const encrypted = this.cryptoProvider.isEnabled()
+      ? await this.cryptoProvider.encrypt(refresh_token, {
+          dekId: user.dataEncryptionKeyId ?? undefined,
+        })
+      : null;
+
     await this.refreshTokenRepository.save({
       jti,
       userId: user.id,
@@ -63,6 +74,8 @@ export class GenerateTokenProvider {
       expiresAt: new Date(Date.now() + this.jwtconfiguration.Rttl * 1000),
       revokedAt: null,
       userAgent: null,
+      encryptedData: encrypted?.ciphertext ?? null,
+      dataEncryptionKeyId: encrypted?.dekId ?? null,
     });
 
     return { access_token, refresh_token, jti };

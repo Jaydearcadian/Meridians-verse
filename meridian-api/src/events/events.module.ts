@@ -6,9 +6,15 @@ import { AuditController } from './audit.controller';
 import { WebhookController } from './webhook.controller';
 import { Webhook } from './webhook.entity';
 import { LeaderboardProofModule } from '../leaderboard/leaderboard-proof.module';
+import { CryptoModule } from 'src/crypto/crypto.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Webhook]), AuditModule, LeaderboardProofModule],
+  imports: [
+    TypeOrmModule.forFeature([Webhook]),
+    AuditModule,
+    LeaderboardProofModule,
+    CryptoModule,
+  ],
   providers: [EventsService],
   controllers: [AuditController, WebhookController],
   exports: [EventsService],

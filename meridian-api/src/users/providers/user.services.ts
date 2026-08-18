@@ -10,6 +10,7 @@ import { FindOneByEmail } from './find-one-by-email';
 import { CreateManyUser } from './createManyUser.Provider';
 import { CreateManyUsersDto } from '../dto/create-many-users.dto';
 import { CreateUserBookProvider } from './createUserWithBook';
+import { HashingProvider } from 'src/auth/providers/hashing';
 
 @Injectable()
 export class UserService {
@@ -26,6 +27,10 @@ export class UserService {
 
     // depedency injection of createManyUsers
     private readonly createManyUserService: CreateManyUser,
+
+    // one-way hashing for password writes (issue #631 keeps passwords hashed
+    // while CryptoProvider handles reversible encryption).
+    private readonly hashingProvider: HashingProvider,
   ) {}
   // repository pattern that help commiunicate with the Database
   // just by doing this we have injected a repository pattern
@@ -118,7 +123,12 @@ export class UserService {
 
     edit.firstName = edituserDto.firstName ?? edit.firstName;
     edit.lastName = edituserDto.lastName ?? edit.lastName;
-    edit.password = edituserDto.password ?? edit.password;
+    if (edituserDto.password) {
+      // Hash before persisting — a password must never be written in the clear.
+      edit.password = await this.hashingProvider.hashPassword(
+        edituserDto.password,
+      );
+    }
     edit.email = edituserDto.email ?? edit.email;
 
     return this.usersRepository.save(edit);

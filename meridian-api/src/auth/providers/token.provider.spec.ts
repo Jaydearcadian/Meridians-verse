@@ -16,6 +16,11 @@ describe('GenerateTokenProvider', () => {
   let jwtService: { signAsync: jest.Mock };
   let refreshTokenRepository: { save: jest.Mock };
   let hashingProvider: { hashPassword: jest.Mock };
+  let cryptoProvider: {
+    isEnabled: jest.Mock;
+    encrypt: jest.Mock;
+    decrypt: jest.Mock;
+  };
 
   const jwtConfig = {
     secret: 'secret',
@@ -34,12 +39,21 @@ describe('GenerateTokenProvider', () => {
     };
     refreshTokenRepository = { save: jest.fn(async (entity) => entity) };
     hashingProvider = { hashPassword: jest.fn(async () => 'token-hash') };
+    cryptoProvider = {
+      isEnabled: jest.fn(() => false),
+      encrypt: jest.fn(async () => ({
+        ciphertext: 'envelope',
+        dekId: 'dek-1',
+      })),
+      decrypt: jest.fn(async () => 'plain'),
+    };
 
     provider = new GenerateTokenProvider(
       jwtService as any,
       jwtConfig as any,
       refreshTokenRepository as any,
       hashingProvider as any,
+      cryptoProvider as any,
     );
   });
 
@@ -72,8 +86,29 @@ describe('GenerateTokenProvider', () => {
           userId: 5,
           tokenHash: 'token-hash',
           revokedAt: null,
+          encryptedData: null,
+          dataEncryptionKeyId: null,
         }),
       );
+      expect(cryptoProvider.encrypt).not.toHaveBeenCalled();
+    });
+
+    it('stores an encrypted copy of the refresh token when KEK is enabled (issue #631)', async () => {
+      cryptoProvider.isEnabled.mockReturnValue(true);
+
+      await provider.generateTokens({ id: 5, email: 'a@b.com' } as any);
+
+      expect(cryptoProvider.encrypt).toHaveBeenCalledWith(
+        expect.any(String),
+        { dekId: undefined },
+      );
+      expect(refreshTokenRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          encryptedData: 'envelope',
+          dataEncryptionKeyId: 'dek-1',
+        }),
+      );
+    });
       expect(result).toMatchObject({
         access_token: expect.stringContaining(':5'),
         refresh_token: expect.stringContaining(':5'),

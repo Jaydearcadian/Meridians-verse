@@ -42,6 +42,7 @@ describe('UserService', () => {
     getAllUserWithBook: jest.Mock;
   };
   let createManyUserService: { manyUsers: jest.Mock };
+  let hashingProvider: { hashPassword: jest.Mock; comparePassword: jest.Mock };
 
   const mockUser = {
     id: 1,
@@ -64,6 +65,10 @@ describe('UserService', () => {
       getAllUserWithBook: jest.fn(async () => [mockUser]),
     };
     createManyUserService = { manyUsers: jest.fn(async () => [mockUser]) };
+    hashingProvider = {
+      hashPassword: jest.fn(async () => 'hashed-updated'),
+      comparePassword: jest.fn(async () => true),
+    };
 
     service = new UserService(
       usersRepository as any,
@@ -71,6 +76,7 @@ describe('UserService', () => {
       findOneByemail as any,
       createUserWithBooks as any,
       createManyUserService as any,
+      hashingProvider as any,
     );
   });
 
@@ -115,6 +121,17 @@ describe('UserService', () => {
     const dto = { id: 1, firstName: 'Updated' } as any;
     await service.editUser(dto);
     expect(usersRepository.save).toHaveBeenCalled();
+  });
+
+  it('editUser hashes a provided password instead of storing plaintext (issue #631)', async () => {
+    usersRepository.findOneBy.mockResolvedValueOnce({ ...mockUser });
+
+    await service.editUser({ id: 1, password: 'NewPass1!' } as any);
+
+    expect(hashingProvider.hashPassword).toHaveBeenCalledWith('NewPass1!');
+    expect(usersRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ password: 'hashed-updated' }),
+    );
   });
 
   it('editUser keeps existing fields when fields are missing', async () => {

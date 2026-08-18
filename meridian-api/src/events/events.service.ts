@@ -6,6 +6,7 @@ import { AuditLog, AuditAction } from '../audit/audit-log.entity';
 import { AuditService } from '../audit/audit.service';
 import { Webhook } from './webhook.entity';
 import { LeaderboardProofService } from '../leaderboard/leaderboard-proof.service';
+import { CryptoProvider } from 'src/crypto/providers/crypto.provider';
 
 export interface ContractEvent {
   txHash: string;
@@ -41,6 +42,10 @@ export class EventsService implements OnModuleInit {
     private readonly leaderboardProofService: LeaderboardProofService,
     @InjectRepository(Webhook)
     private readonly webhookRepo: Repository<Webhook>,
+
+    // Envelope encryption (issue #631): webhook secrets are encrypted at
+    // rest and only decrypted in-memory at delivery time.
+    private readonly cryptoProvider: CryptoProvider,
   ) {}
 
   onModuleInit(): void {
@@ -172,15 +177,40 @@ export class EventsService implements OnModuleInit {
         ? randomBytes(32).toString('hex')
         : 'no-secret';
 
+    // Encrypt the secret at rest (issue #631). In transparent-fallback mode
+    // (no KEK) the secret keeps the legacy plaintext column so ciphertext
+    // columns never hold plaintext; production requires a KEK via env schema.
+    let storedSecret: string | null = null;
+    let encryptedData: string | null = null;
+    let dataEncryptionKeyId: string | null = null;
+    if (this.cryptoProvider.isEnabled()) {
+      const encrypted = await this.cryptoProvider.encrypt(secret);
+      encryptedData = encrypted.ciphertext;
+      dataEncryptionKeyId = encrypted.dekId;
+    } else {
+      storedSecret = secret;
+    }
+
     const webhook = this.webhookRepo.create({
       url: dto.url,
       contract: dto.contract || null,
       action: dto.action || null,
       address: dto.address || null,
-      secret,
+      secret: storedSecret,
+      encryptedData,
+      dataEncryptionKeyId,
     });
 
-    return this.webhookRepo.save(webhook);
+    const saved = await this.webhookRepo.save(webhook);
+
+    // Return the plaintext secret exactly once (registration response) so the
+    // client can verify X-Webhook-Signature; the envelope columns stay hidden.
+    return {
+      ...saved,
+      secret,
+      encryptedData: null,
+      dataEncryptionKeyId: null,
+    };
   }
 
   async verifyHashChain(): Promise<{
@@ -328,6 +358,12 @@ export class EventsService implements OnModuleInit {
       if (wh.address && event.address && wh.address !== event.address) continue;
 
       try {
+        // Resolve the signing secret: decrypt the envelope for new rows,
+        // fall back to the legacy plaintext column for pre-migration rows.
+        const secret = wh.encryptedData
+          ? await this.cryptoProvider.decrypt(wh.encryptedData)
+          : (wh.secret ?? '');
+
         const payload = JSON.stringify({
           txHash: event.txHash,
           contract: event.contract,
@@ -339,7 +375,7 @@ export class EventsService implements OnModuleInit {
           timestamp: new Date().toISOString(),
         });
 
-        const signature = createHmac('sha256', wh.secret)
+        const signature = createHmac('sha256', secret)
           .update(payload)
           .digest('hex');
 

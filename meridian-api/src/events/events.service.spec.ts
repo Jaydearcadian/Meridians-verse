@@ -6,6 +6,7 @@ import { AuditLog } from '../audit/audit-log.entity';
 import { EventsService, RpcProvider, ContractEvent } from './events.service';
 import { Webhook } from './webhook.entity';
 import { LeaderboardProofService } from '../leaderboard/leaderboard-proof.service';
+import { CryptoProvider } from '../crypto/providers/crypto.provider';
 
 describe('EventsService', () => {
   let service: EventsService;
@@ -61,12 +62,21 @@ describe('EventsService', () => {
       getEpochNumberFromBlock: jest.fn().mockReturnValue(1),
     };
 
+    const mockCryptoProvider = {
+      isEnabled: jest.fn().mockReturnValue(true),
+      encrypt: jest.fn().mockResolvedValue({ ciphertext: 'envelope', dekId: 'dek-1' }),
+      decrypt: jest.fn().mockResolvedValue('the-plain-secret'),
+      createDek: jest.fn(),
+      attachDekToUser: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         EventsService,
         { provide: AuditService, useValue: mockAuditService },
         { provide: getRepositoryToken(Webhook), useValue: mockWebhookRepo },
         { provide: LeaderboardProofService, useValue: mockLeaderboardService },
+        { provide: CryptoProvider, useValue: mockCryptoProvider },
       ],
     }).compile();
 
@@ -225,6 +235,28 @@ describe('EventsService', () => {
 
       expect(mockWebhookRepo.create).toHaveBeenCalled();
       expect(mockWebhookRepo.save).toHaveBeenCalled();
+    });
+
+    it('encrypts the secret at rest and returns the plaintext once (issue #631)', async () => {
+      mockWebhookRepo.create.mockImplementation((entity) => entity);
+      mockWebhookRepo.save.mockImplementation((entity) =>
+        Promise.resolve({ id: 'wh-1', ...entity }),
+      );
+
+      const result = await service.registerWebhook({
+        url: 'https://example.com/webhook',
+      });
+
+      expect(mockWebhookRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          secret: null,
+          encryptedData: 'envelope',
+          dataEncryptionKeyId: 'dek-1',
+        }),
+      );
+      expect(result.secret).toMatch(/^[0-9a-f]{64}$/);
+      expect(result.encryptedData).toBeNull();
+      expect(result.dataEncryptionKeyId).toBeNull();
     });
   });
 });

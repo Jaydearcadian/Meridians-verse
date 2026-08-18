@@ -18,6 +18,7 @@ import {
   VerificationTokenProvider,
 } from './providers/verification-token.provider';
 import { User } from 'src/users/user.entity';
+import { CryptoModule } from 'src/crypto/crypto.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { User } from 'src/users/user.entity';
     ConfigModule.forFeature(jwtConfig),
     JwtModule.registerAsync(jwtConfig.asProvider()),
     TypeOrmModule.forFeature([RefreshToken, User]),
+    CryptoModule,
   ],
   providers: [
     AuthService,
