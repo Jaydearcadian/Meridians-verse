@@ -47,3 +47,4 @@ zk = [
     "ark-snark",
     "ark-serialize",
 ]
+verification = ["proptest"]

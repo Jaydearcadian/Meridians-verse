@@ -28,3 +28,4 @@ std = [
     "propchain-traits/std",
 ]
 ink-as-dependency = []
+verification = ["proptest"]

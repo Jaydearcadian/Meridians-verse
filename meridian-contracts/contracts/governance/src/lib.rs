@@ -922,3 +922,144 @@ mod policy_change_pipeline_tests {
         assert_eq!(unchanged.status, PolicyStatus::Active);
     }
 }
+
+// =========================================================================
+// Formal verification and property-based tests (#630)
+// =========================================================================
+
+#[cfg(all(test, feature = "verification"))]
+mod verification_tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Env, Address};
+
+    /// Kani harness: yes_votes + no_votes == total_weight.
+    #[cfg(feature = "kani")]
+    #[kani::proof]
+    fn kani_verify_vote_sum_equals_total_weight() {
+        use stellar_insured_lib::verification::invariants::vote_sum_equals_total_weight;
+        let yes_votes: i128 = kani::any();
+        let no_votes: i128 = kani::any();
+        let total_weight: i128 = kani::any();
+        kani::assume(yes_votes >= 0);
+        kani::assume(no_votes >= 0);
+        kani::assume(total_weight >= 0);
+        kani::assume(yes_votes + no_votes == total_weight);
+        assert!(vote_sum_equals_total_weight(yes_votes, no_votes, total_weight));
+    }
+
+    /// Kani harness: threshold monotonicity — increasing threshold cannot make a
+    /// previously failing proposal pass.
+    #[cfg(feature = "kani")]
+    #[kani::proof]
+    fn kani_verify_threshold_monotonic() {
+        use stellar_insured_lib::verification::invariants::threshold_monotonic;
+        let yes_votes: i128 = kani::any();
+        let total_votes: i128 = kani::any();
+        let threshold_old: u32 = kani::any();
+        let threshold_new: u32 = kani::any();
+        kani::assume(yes_votes >= 0);
+        kani::assume(total_votes >= 0);
+        kani::assume(total_votes > 0);
+        kani::assume(threshold_new > threshold_old);
+        assert!(threshold_monotonic(yes_votes, total_votes, threshold_old, threshold_new));
+    }
+
+    /// Property-based test: vote sum equals total weight.
+    #[cfg(feature = "proptest")]
+    #[test]
+    fn prop_verify_vote_sum_equals_total_weight() {
+        use proptest::prelude::*;
+        use stellar_insured_lib::verification::invariants::vote_sum_equals_total_weight;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            #[test]
+            fn prop_vote_sum_equals_total_weight(
+                yes_votes in 0i128..=1_000_000_000i128,
+                no_votes in 0i128..=1_000_000_000i128,
+            ) {
+                let total = yes_votes + no_votes;
+                prop_assert!(vote_sum_equals_total_weight(yes_votes, no_votes, total));
+            }
+        }
+    }
+
+    /// Property-based test: threshold monotonicity.
+    #[cfg(feature = "proptest")]
+    #[test]
+    fn prop_verify_threshold_monotonic() {
+        use proptest::prelude::*;
+        use stellar_insured_lib::verification::invariants::threshold_monotonic;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            #[test]
+            fn prop_threshold_monotonic(
+                yes_votes in 0i128..=1_000_000_000i128,
+                total_votes in 1i128..=1_000_000_000i128,
+                threshold_old in 1u32..=100,
+                threshold_new in 1u32..=100,
+            ) {
+                kani::assume(threshold_new > threshold_old);
+                let passes_old = total_votes > 0 && (yes_votes * 100 / total_votes) >= threshold_old as i128;
+                let passes_new = total_votes > 0 && (yes_votes * 100 / total_votes) >= threshold_new as i128;
+                if !passes_old {
+                    prop_assert!(!passes_new);
+                }
+                prop_assert!(threshold_monotonic(yes_votes, total_votes, threshold_old, threshold_new));
+            }
+        }
+    }
+
+    /// End-to-end Soroban test: governance vote invariants hold after voting.
+    #[test]
+    fn test_governance_vote_invariants() {
+        let env = Env::default();
+        let contract = env.register_contract(None, GovernanceContract);
+        let admin = Address::generate(&env);
+        let token = Address::generate(&env);
+        let slashing = Address::generate(&env);
+        let claims = Address::generate(&env);
+        let risk_pool = Address::generate(&env);
+        let policy = Address::generate(&env);
+        env.mock_all_auths();
+        env.as_contract(&contract, || {
+            GovernanceContract::initialize(
+                env.clone(),
+                admin.clone(),
+                token,
+                slashing,
+                1000,
+                claims,
+                risk_pool,
+                policy,
+            ).unwrap();
+        });
+
+        // Create proposal and vote
+        let proposal_id = env.as_contract(&contract, || {
+            GovernanceContract::create_proposal(
+                env.clone(),
+                admin.clone(),
+                String::from_str(&env, "Test"),
+                String::from_str(&env, "Desc"),
+                String::from_str(&env, "exec"),
+                50,
+            ).unwrap()
+        });
+
+        let voter = Address::generate(&env);
+        env.as_contract(&contract, || {
+            GovernanceContract::vote(env.clone(), voter, proposal_id, 100, true).unwrap();
+        });
+
+        let stats = env.as_contract(&contract, || {
+            GovernanceContract::get_proposal_stats(env.clone(), proposal_id)
+        });
+        assert_eq!(stats.yes_votes + stats.no_votes, stats.total_votes);
+        assert_eq!(stats.total_votes, 100);
+    }
+}

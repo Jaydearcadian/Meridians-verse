@@ -12,6 +12,11 @@ publish = false
 [dependencies]
 soroban-sdk = { workspace = true }
 
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+kani = { workspace = true, optional = true }
+proptest = { workspace = true, optional = true }
+
 [lib]
 name = "propchain_bridge"
 path = "src/lib.rs"
@@ -20,3 +25,4 @@ crate-type = ["cdylib"]
 [features]
 default = ["std"]
 std = ["soroban-sdk/testutils"]
+verification = ["kani", "proptest", "stellar-insured-lib/verification"]

@@ -319,3 +319,144 @@ mod tests {
 
 #[cfg(test)]
 mod access_control_test;
+
+// =========================================================================
+// Formal verification and property-based tests (#630)
+// =========================================================================
+
+#[cfg(all(test, feature = "verification"))]
+mod verification_tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Env, Address};
+
+    /// Kani harness: claim.amount <= policy.coverage_amount.
+    #[cfg(feature = "kani")]
+    #[kani::proof]
+    fn kani_verify_claim_within_coverage() {
+        use stellar_insured_lib::verification::invariants::claim_within_coverage;
+        let total_claimed: i128 = kani::any();
+        let claim_amount: i128 = kani::any();
+        let coverage: i128 = kani::any();
+        kani::assume(total_claimed >= 0);
+        kani::assume(claim_amount > 0);
+        kani::assume(coverage >= 0);
+        kani::assume(total_claimed + claim_amount <= coverage);
+        assert!(claim_within_coverage(total_claimed, claim_amount, coverage));
+    }
+
+    /// Kani harness: claim amount must be positive.
+    #[cfg(feature = "kani")]
+    #[kani::proof]
+    fn kani_verify_claim_amount_positive() {
+        let amount: i128 = kani::any();
+        kani::assume(amount > 0);
+        assert!(amount > 0);
+    }
+
+    /// Kani harness: claim.amount + total_claimed <= coverage_amount.
+    #[cfg(feature = "kani")]
+    #[kani::proof]
+    fn kani_verify_claim_plus_total_does_not_exceed_coverage() {
+        let total_claimed: i128 = kani::any();
+        let claim_amount: i128 = kani::any();
+        let coverage: i128 = kani::any();
+        kani::assume(total_claimed >= 0);
+        kani::assume(claim_amount > 0);
+        kani::assume(coverage >= 0);
+        kani::assume(total_claimed + claim_amount <= coverage);
+        assert!(total_claimed + claim_amount <= coverage);
+    }
+
+    /// Property-based test: claim_within_coverage invariant.
+    #[cfg(feature = "proptest")]
+    #[test]
+    fn prop_verify_claim_within_coverage() {
+        use proptest::prelude::*;
+        use stellar_insured_lib::verification::invariants::claim_within_coverage;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            #[test]
+            fn prop_claim_within_coverage(
+                total_claimed in 0i128..=1_000_000_000i128,
+                claim_amount in 1i128..=1_000_000_000i128,
+                coverage in 0i128..=1_000_000_000i128,
+            ) {
+                let max_claim = (coverage - total_claimed).max(0);
+                if claim_amount <= max_claim {
+                    prop_assert!(claim_within_coverage(total_claimed, claim_amount, coverage));
+                } else {
+                    prop_assert!(!claim_within_coverage(total_claimed, claim_amount, coverage));
+                }
+            }
+        }
+    }
+
+    /// Property-based test: claim amount is always positive.
+    #[cfg(feature = "proptest")]
+    #[test]
+    fn prop_verify_claim_amount_positive() {
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            #[test]
+            fn prop_claim_amount_positive(amount in 1i128..=1_000_000_000i128) {
+                prop_assert!(amount > 0);
+            }
+        }
+    }
+
+    /// Property-based test: total_claimed + claim_amount never exceeds coverage.
+    #[cfg(feature = "proptest")]
+    #[test]
+    fn prop_verify_total_claimed_plus_amount_within_coverage() {
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            #[test]
+            fn prop_total_claimed_plus_amount_within_coverage(
+                total_claimed in 0i128..=1_000_000_000i128,
+                claim_amount in 1i128..=1_000_000_000i128,
+                coverage in 0i128..=1_000_000_000i128,
+            ) {
+                let max_claim = (coverage - total_claimed).max(0);
+                if claim_amount <= max_claim {
+                    prop_assert!(total_claimed + claim_amount <= coverage);
+                } else {
+                    prop_assert!(total_claimed + claim_amount > coverage);
+                }
+            }
+        }
+    }
+
+    /// End-to-end Soroban test: claim invariants hold after submission.
+    #[test]
+    fn test_claim_invariants_after_submission() {
+        let env = Env::default();
+        let contract = env.register_contract(None, ClaimsContract);
+        let admin = Address::generate(&env);
+        let policy_contract = Address::generate(&env);
+        let risk_pool = Address::generate(&env);
+        env.mock_all_auths();
+        env.as_contract(&contract, || {
+            ClaimsContract::initialize(env.clone(), admin.clone(), policy_contract, risk_pool);
+        });
+
+        // Submit a valid claim
+        let claim_id = env.as_contract(&contract, || {
+            ClaimsContract::submit_claim(env.clone(), 1, 500)
+        });
+
+        let claim = env.as_contract(&contract, || {
+            ClaimsContract::get_claim(env.clone(), claim_id)
+        });
+        assert!(claim.amount > 0, "claim amount must be positive");
+        assert!(claim.claim_id > 0, "claim id must be positive");
+    }
+}

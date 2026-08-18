@@ -10,6 +10,9 @@ scale = { workspace = true, features = ["std"] }
 scale-info = { workspace = true, features = ["std"] }
 propchain-traits = { path = "../traits" }
 
+[dev-dependencies]
+proptest = { workspace = true, optional = true }
+
 [lib]
 name = "propchain_proxy"
 path = "src/lib.rs"
@@ -23,3 +26,4 @@ std = [
     "scale-info/std",
 ]
 ink-as-dependency = []
+verification = ["proptest"]

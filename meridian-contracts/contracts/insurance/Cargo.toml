@@ -20,6 +20,7 @@ propchain-traits = { path = "../traits", default-features = false }
 
 [dev-dependencies]
 ink_e2e = "5.1.1"
+proptest = { workspace = true, optional = true }
 
 [lib]
 path = "src/lib.rs"
@@ -34,3 +35,4 @@ std = [
 ]
 ink-as-dependency = []
 e2e-tests = []
+verification = ["proptest"]

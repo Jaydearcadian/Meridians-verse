@@ -10,6 +10,15 @@ publish = false
 [dependencies]
 soroban-sdk = { workspace = true }
 
+[dev-dependencies]
+kani = { workspace = true, optional = true }
+prusti-contracts = { workspace = true, optional = true }
+
+[features]
+default = ["std"]
+std = ["soroban-sdk/std"]
+verification = ["kani", "prusti-contracts"]
+
 [lib]
 name = "stellar_insured_lib"
 path = "src/lib.rs"
