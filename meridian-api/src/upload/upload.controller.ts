@@ -14,8 +14,11 @@ import {
   ApiResponse,
   ApiConsumes,
   ApiBody,
+  ApiBearerAuth,
 } from '@nestjs/swagger';
 import { UploadService, MAX_FILE_SIZE } from './upload.service';
+import { RequirePermissions } from 'src/auth/decorators/permissions/permissions.decorator';
+import { Permission } from 'src/auth/enums/permission.enum';
 
 @ApiTags('Upload')
 @Controller('upload')
@@ -27,6 +30,9 @@ export class UploadController {
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a file asset' })
   @ApiResponse({ status: 201, description: 'File successfully uploaded' })
+  @ApiResponse({ status: 401, description: 'Unauthorized — a valid token is required' })
+  @RequirePermissions(Permission.UPLOAD_CREATE)
+  @ApiBearerAuth()
   @ApiResponse({
     status: 400,
     description: 'Bad request – invalid file type, size, or content',

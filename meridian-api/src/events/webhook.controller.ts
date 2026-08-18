@@ -3,8 +3,10 @@ import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { EventsService } from './events.service';
 import { WebhookRegistrationDto } from './dto/webhook-registration.dto';
+import { Public } from 'src/auth/decorators/public/public.decorator';
 
 @ApiTags('Webhooks')
+@Public()
 @Controller('webhooks')
 export class WebhookController {
   constructor(private readonly eventsService: EventsService) {}

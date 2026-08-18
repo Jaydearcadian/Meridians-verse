@@ -165,6 +165,46 @@ export class EventsService implements OnModuleInit {
     return this.auditService['auditRepo'].findOne({ where: { txHash } });
   }
 
+  /**
+   * Admin-only audit log review (issue #632): aggregate statistics over the
+   * whole audit log — total entries, counts grouped by action and by
+   * contract, and hash-chain integrity.
+   */
+  async getAuditStats(): Promise<{
+    total: number;
+    byAction: Array<{ action: string; count: string }>;
+    byContract: Array<{ contract: string; count: string }>;
+    chainValid: boolean;
+    chainEntries: number;
+  }> {
+    const repo = this.auditService['auditRepo'];
+    const [total, byAction, byContract, chain] = await Promise.all([
+      repo.count(),
+      repo
+        .createQueryBuilder('log')
+        .select('log.action', 'action')
+        .addSelect('COUNT(*)', 'count')
+        .groupBy('log.action')
+        .getRawMany(),
+      repo
+        .createQueryBuilder('log')
+        .select('log.contract', 'contract')
+        .addSelect('COUNT(*)', 'count')
+        .where('log.contract IS NOT NULL')
+        .groupBy('log.contract')
+        .getRawMany(),
+      this.verifyHashChain(),
+    ]);
+
+    return {
+      total,
+      byAction,
+      byContract,
+      chainValid: chain.valid,
+      chainEntries: chain.entries,
+    };
+  }
+
   async registerWebhook(dto: {
     url: string;
     contract?: string;

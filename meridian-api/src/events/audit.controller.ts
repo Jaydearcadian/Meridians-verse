@@ -13,11 +13,16 @@ import {
   ApiQuery,
   ApiParam,
   ApiResponse,
+  ApiBearerAuth,
 } from '@nestjs/swagger';
 import { EventsService } from './events.service';
 import { AuditQueryDto } from './dto/audit-query.dto';
+import { RequireRoles } from 'src/auth/decorators/roles/roles.decorator';
+import { Role } from 'src/auth/enums/role.enum';
 
 @ApiTags('Audit')
+@RequireRoles(Role.ADMIN)
+@ApiBearerAuth()
 @Controller('audit')
 export class AuditController {
   constructor(private readonly eventsService: EventsService) {}
@@ -56,12 +61,26 @@ export class AuditController {
     return this.eventsService.verifyHashChain();
   }
 
+  // Admin-only (class-level @RequireRoles(Role.ADMIN)). The public proof
+  // endpoint for external verification is GET /leaderboard/proof.
   @Get('leaderboard')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Build Merkle proofs for the latest leaderboard audit entries' })
-  @ApiResponse({ status: 200, description: 'Merkle proof bundle for public leaderboard verification' })
+  @ApiResponse({ status: 200, description: 'Merkle proof bundle for leaderboard audit review' })
   async leaderboardProofs(@Query('limit') limit?: number) {
     return this.eventsService.getLeaderboardProofs(limit ?? 10);
+  }
+
+  /**
+   * Admin-only audit log review (issue #632): aggregate stats over the whole
+   * audit log (counts by action and contract, chain validity).
+   */
+  @Get('stats')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Audit log review stats (admin only, issue #632)' })
+  @ApiResponse({ status: 200, description: 'Aggregate audit statistics' })
+  async stats() {
+    return this.eventsService.getAuditStats();
   }
 
   @Get(':txHash')

@@ -6,6 +6,7 @@ import { VerificationTokenProvider } from './verification-token.provider';
 import { MailProvider } from 'src/mail/providers/mail.provider';
 import { VERIFICATION_TTL_MS } from './verification-token.constants';
 import { CryptoProvider, constantTimeEqual } from 'src/crypto/providers/crypto.provider';
+import { Role } from '../enums/role.enum';
 
 /**
  * Email-verification flows (issue #435).
@@ -126,14 +127,21 @@ export class VerifyEmailProvider {
         continue;
       }
 
+      // RBAC promotion (issue #632): once an email is verified the user is
+      // upgraded from USER → VERIFIED_USER so they inherit verified-tier
+      // permissions on their next sign-in.
+      const nextRole =
+        (user.role ?? Role.USER) === Role.USER ? Role.VERIFIED_USER : user.role;
+
       await this.usersRepository.update(user.id, {
         emailVerified: true,
+        role: nextRole,
         emailVerificationToken: null,
         emailVerificationExpires: null,
         encryptedData: null,
       });
 
-      return { ...user, emailVerified: true };
+      return { ...user, emailVerified: true, role: nextRole };
     }
 
     throw new UnauthorizedException('Invalid or expired verification token');

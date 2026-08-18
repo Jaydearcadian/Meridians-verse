@@ -21,7 +21,13 @@ jest.mock('@nestjs/swagger', () => {
 // ----- Auth module constants & DTOs -----
 jest.mock(
   'src/auth/constant/auth-constant',
-  () => ({ REQUEST_USER_KEY: 'user', AUTH_TYPE_kEY: 'authType' }),
+  () => ({
+    REQUEST_USER_KEY: 'user',
+    AUTH_TYPE_kEY: 'authType',
+    IS_PUBLIC_KEY: 'isPublic',
+    REQUIRED_ROLES_KEY: 'requiredRoles',
+    REQUIRED_PERMISSIONS_KEY: 'requiredPermissions',
+  }),
   { virtual: true },
 );
 jest.mock(
