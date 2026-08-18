@@ -17,7 +17,7 @@ prusti-contracts = { workspace = true, optional = true }
 [features]
 default = ["std"]
 std = ["soroban-sdk/std"]
-verification = ["kani", "prusti-contracts"]
+verification = ["std", "kani", "prusti-contracts"]
 
 [lib]
 name = "stellar_insured_lib"
