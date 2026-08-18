@@ -1,6 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
+use stellar_insured_lib::events::emit_event_with;
 use stellar_insured_lib::RiskPoolError;
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 
@@ -114,10 +115,11 @@ impl RiskPoolContract {
         env.storage().instance().set(&DataKey::TotalCapital, &new_total);
         env.storage().instance().set(&DataKey::AvailableCapital, &new_available);
 
-        // #412: Enhanced event emission with provider info
-        env.events().publish(
-            (symbol_short!("pool"), symbol_short!("deposit")),
-            (provider, amount, new_stake),
+        emit_event_with(
+            &env,
+            symbol_short!("RPOOL"),
+            symbol_short!("DEPOSIT"),
+            &(provider, amount, new_stake),
         );
         Ok(())
     }
@@ -148,10 +150,11 @@ impl RiskPoolContract {
         env.storage().instance().set(&DataKey::TotalCapital, &new_total);
         env.storage().instance().set(&DataKey::AvailableCapital, &new_available);
 
-        // #412: Enhanced event emission
-        env.events().publish(
-            (symbol_short!("pool"), symbol_short!("withdraw")),
-            (provider, amount, new_stake),
+        emit_event_with(
+            &env,
+            symbol_short!("RPOOL"),
+            symbol_short!("WITHDRAW"),
+            &(provider, amount, new_stake),
         );
         Ok(())
     }
@@ -177,10 +180,11 @@ impl RiskPoolContract {
         let paid = env.storage().instance().get(&DataKey::ClaimsPaid).unwrap_or(0);
         env.storage().instance().set(&DataKey::ClaimsPaid, &(paid + amount));
 
-        // #412: Enhanced event emission with recipient info
-        env.events().publish(
-            (symbol_short!("pool"), symbol_short!("payout")),
-            (recipient, amount, new_available),
+        emit_event_with(
+            &env,
+            symbol_short!("RPOOL"),
+            symbol_short!("PAYOUT"),
+            &(recipient, amount, new_available),
         );
         Ok(())
     }
@@ -216,10 +220,11 @@ impl RiskPoolContract {
         let new_available = get_available_capital(&env) + amount;
         env.storage().instance().set(&DataKey::AvailableCapital, &new_available);
 
-        // #601: structured event for the slashed-stake credit
-        env.events().publish(
-            (symbol_short!("pool"), symbol_short!("slashed")),
-            (target, amount, new_available),
+        emit_event_with(
+            &env,
+            symbol_short!("RPOOL"),
+            symbol_short!("SLASHED"),
+            &(target, amount, new_available),
         );
         Ok(())
     }
@@ -266,8 +271,7 @@ impl RiskPoolContract {
             _ => return Err(RiskPoolError::AlreadyInitialized),
         }
 
-        env.events()
-            .publish((symbol_short!("pool"), symbol_short!("migrated")), to_version);
+        emit_event_with(&env, symbol_short!("RPOOL"), symbol_short!("MIGRATED"), &to_version);
         Ok(())
     }
 }

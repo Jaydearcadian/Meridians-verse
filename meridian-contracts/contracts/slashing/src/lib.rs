@@ -2,6 +2,7 @@
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, Symbol};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
+use stellar_insured_lib::events::emit_event_with;
 
 // Maximum slashing history entries per (target, role) to prevent storage bloat (#380)
 const MAX_HISTORY: u32 = 50;
@@ -77,9 +78,11 @@ impl SlashingContract {
         env.storage().instance().set(&DataKey::SlashableRoles, &Vec::<Symbol>::new(&env));
         access_control::init_access_control(&env, &admin);
 
-        env.events().publish(
-            (symbol_short!("slash"), symbol_short!("init")),
-            (admin, governance, risk_pool),
+        emit_event_with(
+            &env,
+            symbol_short!("SLASH"),
+            symbol_short!("INIT"),
+            &(admin, governance, risk_pool),
         );
     }
 
@@ -92,17 +95,15 @@ impl SlashingContract {
         access_control::require_role(&env, &caller, &AccessControlRole::Admin);
 
         env.storage().persistent().set(&DataKey::PenaltyParams(role.clone()), &params);
-        
-        env.events().publish(
-            (symbol_short!("slash"), symbol_short!("config")),
-            (role.clone(), params.percentage, params.multiplier),
+
+        emit_event_with(
+            &env,
+            symbol_short!("SLASH"),
+            symbol_short!("CONFIG"),
+            &(role.clone(), params.percentage, params.multiplier),
         );
 
-        // #379: emit event for admin action
-        env.events().publish(
-            (symbol_short!("admin"), symbol_short!("cfg_pen")),
-            role,
-        );
+        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("CFG_PEN"), &role);
     }
 
     pub fn slash_funds(env: Env, target: Address, role: Symbol, reason: String, amount: i128) {
@@ -142,9 +143,11 @@ impl SlashingContract {
         history.push_back(record);
         set_history(&env, &target, &role, &history);
 
-        env.events().publish(
-            (symbol_short!("slash"), role),
-            amount,
+        emit_event_with(
+            &env,
+            symbol_short!("SLASH"),
+            symbol_short!("SLASHED"),
+            &(target.clone(), role.clone(), amount),
         );
     }
 
@@ -156,18 +159,11 @@ impl SlashingContract {
         if !roles.contains(role.clone()) {
             roles.push_back(role.clone());
             env.storage().instance().set(&DataKey::SlashableRoles, &roles);
-            
-            env.events().publish(
-                (symbol_short!("slash"), symbol_short!("roleadd")),
-                role.clone(),
-            );
+
+            emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("ROLE_ADD"), &role.clone());
         }
 
-        // #379: emit event for admin action
-        env.events().publish(
-            (symbol_short!("admin"), symbol_short!("role_add")),
-            role,
-        );
+        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("ROLE_ADD"), &role);
     }
 
     pub fn remove_slashable_role(env: Env, role: Symbol) {
@@ -182,51 +178,30 @@ impl SlashingContract {
             }
         }
         env.storage().instance().set(&DataKey::SlashableRoles, &new_roles);
-        
-        env.events().publish(
-            (symbol_short!("slash"), symbol_short!("rolerm")),
-            role.clone(),
-        );
 
-        // #379: emit event for admin action
-        env.events().publish(
-            (symbol_short!("admin"), symbol_short!("role_rm")),
-            role,
-        );
+        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("ROLE_RM"), &role.clone());
+
+        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("ROLE_RM"), &role);
     }
 
     pub fn pause(env: Env) {
         let caller = env.current_contract_address();
         access_control::require_role(&env, &caller, &AccessControlRole::Admin);
         env.storage().instance().set(&DataKey::Paused, &true);
-        
-        env.events().publish(
-            (symbol_short!("slash"), symbol_short!("pause")),
-            true,
-        );
 
-        // #379: emit event for admin action
-        env.events().publish(
-            (symbol_short!("admin"), symbol_short!("paused")),
-            true,
-        );
+        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("PAUSED"), &true);
+
+        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("PAUSED"), &true);
     }
 
     pub fn unpause(env: Env) {
         let caller = env.current_contract_address();
         access_control::require_role(&env, &caller, &AccessControlRole::Admin);
         env.storage().instance().set(&DataKey::Paused, &false);
-        
-        env.events().publish(
-            (symbol_short!("slash"), symbol_short!("unpause")),
-            false,
-        );
 
-        // #379: emit event for admin action
-        env.events().publish(
-            (symbol_short!("admin"), symbol_short!("paused")),
-            false,
-        );
+        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("UNPAUSED"), &false);
+
+        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("UNPAUSED"), &false);
     }
 }
 

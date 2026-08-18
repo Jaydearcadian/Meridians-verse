@@ -9,9 +9,11 @@ pub mod access_control;
 pub mod zk;
 #[cfg(feature = "verification")]
 pub mod verification;
+pub mod events;
 
 pub use random::Randomness;
 pub use insurance_types::*;
 pub use errors::*;
 pub use access_control::{AccessControlRole, init_access_control, set_role, require_role, has_role, revoke_role};
 pub use zk::*;
+pub use events::*;
