@@ -34,11 +34,6 @@ ark-groth16 = { version = "0.4", default-features = false }
 ark-ff = { version = "0.4", default-features = false }
 ark-snark = { version = "0.4", default-features = false }
 ark-serialize = { version = "0.4", default-features = false }
-# Formal verification and property-based testing
-kani = { version = "0.60", optional = true }
-prusti-contracts = { version = "0.6", optional = true }
-proptest = { version = "1.4", default-features = false, features = ["std"], optional = true }
-proptest-macro = { version = "1.4", optional = true }
 
 [profile.release]
 overflow-checks = false
