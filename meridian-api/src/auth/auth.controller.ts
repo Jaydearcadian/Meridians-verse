@@ -14,8 +14,14 @@ import { LogoutDto } from './dto/logout.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { Throttle } from '@nestjs/throttler';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+} from '@nestjs/swagger';
 import { AccessTokenGuard } from './guard/access-token/access-token.guard';
+import { Public } from './decorators/public/public.decorator';
 import { REQUEST_USER_KEY } from './constant/auth-constant';
 import { Request } from 'express';
 
@@ -25,6 +31,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('/sign-in')
+  @Public()
   @Throttle({ write: { limit: 5, ttl: 15000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Sign in with user credentials' })
@@ -42,6 +49,7 @@ export class AuthController {
   }
 
   @Post('/refresh-token')
+  @Public()
   @Throttle({ write: { limit: 10, ttl: 60000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Refresh Auth Token' })
@@ -63,6 +71,7 @@ export class AuthController {
   }
 
   @Post('/logout')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Revoke the current refresh token' })
   @ApiResponse({
@@ -81,6 +90,7 @@ export class AuthController {
   @UseGuards(AccessTokenGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Revoke all refresh tokens for the current user' })
+  @ApiBearerAuth()
   @ApiResponse({
     status: 200,
     description: 'Successfully revoked all sessions',
@@ -97,6 +107,7 @@ export class AuthController {
   }
 
   @Post('/verify-email')
+  @Public()
   @Throttle({ write: { limit: 10, ttl: 60000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -113,6 +124,7 @@ export class AuthController {
   }
 
   @Post('/resend-verification')
+  @Public()
   @Throttle({ write: { limit: 3, ttl: 60000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resend the email verification mail' })
