@@ -11,9 +11,11 @@ import {
 } from '@nestjs/common';
 import { PostsService } from './provider/post.service';
 import { CreatePostDto } from './dto/create-post.dto';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { PatchPostDto } from './dto/patch-post.dto';
 import { GetPostsDto } from './dto/get-posts.dto';
+import { RequirePermissions } from 'src/auth/decorators/permissions/permissions.decorator';
+import { Permission } from 'src/auth/enums/permission.enum';
 
 @ApiTags('Posts')
 @Controller('posts')
@@ -33,6 +35,9 @@ export class PostController {
   @ApiOperation({ summary: 'Create a new post' })
   @ApiResponse({ status: 201, description: 'Post created successfully' })
   @ApiResponse({ status: 400, description: 'Bad request / Validation failure' })
+  @ApiResponse({ status: 401, description: 'Unauthorized — a valid token is required' })
+  @RequirePermissions(Permission.POSTS_CREATE)
+  @ApiBearerAuth()
   public Createpost(@Body() createpostdto: CreatePostDto) {
     // console.log(createpostdto instanceof CreatePostDto)
     return this.postService.createPost(createpostdto);

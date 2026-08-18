@@ -47,6 +47,11 @@ export const envValidationSchema = Joi.object({
   // Email verification
   VERIFICATION_TOKEN_TTL_HOURS: Joi.number().integer().positive().default(24),
 
+  // RBAC (issue #632): global kill-switch for the RbacGuard. When set to
+  // `false` every route behaves as public (legacy posture) — useful for a
+  // staged rollout / rollback without code changes. Defaults to enabled.
+  RBAC_ENABLED: Joi.boolean().default(true),
+
   // Application
   APP_URL: Joi.string().uri().default('http://localhost:3000'),
 

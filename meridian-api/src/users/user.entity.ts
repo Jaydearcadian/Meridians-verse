@@ -1,6 +1,7 @@
 import { Exclude } from 'class-transformer';
 import { Post } from 'src/post/post.entity';
 import { Tweet } from 'src/tweets/entities/tweet.entity';
+import { Role } from 'src/auth/enums/role.enum';
 import {
   Entity,
   Column,
@@ -49,6 +50,13 @@ export class User {
   // leaking whether their password was right.
   @Column({ default: false })
   emailVerified: boolean;
+
+  // RBAC role (issue #632): defaults to USER; promoted to VERIFIED_USER on
+  // email verification and managed by admins/moderators via the role
+  // management endpoints. Stored as a varchar so pre-RBAC rows migrate
+  // cleanly via the dedicated migration.
+  @Column('varchar', { length: 32, default: Role.USER })
+  role: Role;
 
   @Exclude()
   @Column('varchar', { nullable: true })

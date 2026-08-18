@@ -2,17 +2,13 @@ import {
   Controller,
   Get,
   Post,
-  Put,
   Delete,
   Param,
   Query,
   Body,
   ParseIntPipe,
   DefaultValuePipe,
-  ValidationPipe,
   Patch,
-  UseGuards,
-  SetMetadata,
   UseInterceptors,
   ClassSerializerInterceptor,
 } from '@nestjs/common';
@@ -27,10 +23,13 @@ import {
   ApiQuery,
   ApiBearerAuth,
 } from '@nestjs/swagger';
-import { AccessTokenGuard } from 'src/auth/guard/access-token/access-token.guard';
-import { Auth } from 'src/auth/decorators/auth/auth.decorator';
-import { AuthType } from 'src/auth/enums/auth-type.enum';
+import { RequireRoles } from 'src/auth/decorators/roles/roles.decorator';
+import { RequirePermissions } from 'src/auth/decorators/permissions/permissions.decorator';
+import { Role } from 'src/auth/enums/role.enum';
+import { Permission } from 'src/auth/enums/permission.enum';
 import { CreateManyUsersDto } from './dto/create-many-users.dto';
+import { AssignRoleDto } from './dto/assign-role.dto';
+import { UserPermissionQueryDto } from './dto/user-permission-query.dto';
 
 @Controller('users')
 // line 14 is a method
@@ -53,8 +52,9 @@ export class UsersController {
     summary: 'Fetch all the users',
   })
 
-  //using a guard
-  // @UseGuards(AccessTokenGuard)
+  // Requires USERS_READ, which is intentionally NOT granted to Role.USER:
+  // email verification promotes USER → VERIFIED_USER (which holds USERS_READ)
+  // and sign-in is gated on emailVerified, so every logged-in user has it.
   @Get('/:id?')
   @ApiQuery({
     name: 'limit',
@@ -68,7 +68,7 @@ export class UsersController {
     required: false,
     description: 'the page number of entries returned per query',
   })
-  @Auth(AuthType.Bearer)
+  @RequirePermissions(Permission.USERS_READ)
   @ApiBearerAuth()
   public getUsers(
     @Param() getuserParamDto: GetuserParamDto,
@@ -84,9 +84,10 @@ export class UsersController {
   @ApiOperation({ summary: 'Create a new user' })
   @ApiResponse({ status: 201, description: 'User created successfully' })
   @ApiResponse({ status: 400, description: 'Bad request' })
+  @ApiResponse({ status: 403, description: 'Forbidden — moderator or admin only' })
   @UseInterceptors(ClassSerializerInterceptor)
-  // @SetMetadata('authType, 'None')
-  @Auth(AuthType.None)
+  @RequireRoles(Role.MODERATOR, Role.ADMIN)
+  @ApiBearerAuth()
   public createUsers(@Body() createUserDto: CreateUserDto) {
     // console.log(createUserDto instanceof CreateUserDto)
     return this.userService.createUsers(createUserDto);
@@ -96,6 +97,8 @@ export class UsersController {
   @ApiOperation({ summary: 'Create multiple users' })
   @ApiResponse({ status: 201, description: 'Users created successfully' })
   @ApiResponse({ status: 400, description: 'Bad request' })
+  @RequireRoles(Role.MODERATOR, Role.ADMIN)
+  @ApiBearerAuth()
   public createMany(@Body() createManyUserDto: CreateManyUsersDto) {
     return this.userService.createMany(createManyUserDto);
   }
@@ -104,8 +107,49 @@ export class UsersController {
   @ApiOperation({ summary: 'Soft-delete a user by ID (issue #427)' })
   @ApiResponse({ status: 200, description: 'User soft-deleted successfully' })
   @ApiResponse({ status: 404, description: 'User not found' })
+  @ApiResponse({ status: 403, description: 'Forbidden — admin only' })
+  @RequireRoles(Role.ADMIN)
+  @ApiBearerAuth()
   public deleteUsers(@Param('id', ParseIntPipe) id: number) {
     return this.userService.deleteUser(id);
+  }
+
+  /**
+   * Admin-only: assign (or demote) a user's role (issue #632).
+   * Role changes take effect on the user's next sign-in since the JWT is
+   * stateless — access tokens already issued keep their previous claims.
+   */
+  @Post('/:id/role')
+  @ApiOperation({ summary: 'Assign a role to a user (admin only, issue #632)' })
+  @ApiResponse({ status: 200, description: 'Role updated successfully' })
+  @ApiResponse({ status: 403, description: 'Forbidden — admin only' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  @RequirePermissions(Permission.USERS_MANAGE_ROLES)
+  @ApiBearerAuth()
+  public assignRole(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() assignRoleDto: AssignRoleDto,
+  ) {
+    return this.userService.assignRole(id, assignRoleDto.role);
+  }
+
+  /**
+   * Admin-only: return the resolved permission list for a user (issue #632).
+   */
+  @Get('/:id/permissions')
+  @ApiOperation({
+    summary: 'Get a user\'s role and resolved permissions (admin only, issue #632)',
+  })
+  @ApiResponse({ status: 200, description: 'Role and permissions returned' })
+  @ApiResponse({ status: 403, description: 'Forbidden — admin only' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  @RequireRoles(Role.ADMIN)
+  @ApiBearerAuth()
+  public getUserPermissions(
+    @Param('id', ParseIntPipe) id: number,
+    @Query() query: UserPermissionQueryDto,
+  ) {
+    return this.userService.getUserPermissions(id, query.permission);
   }
 
   @Post('/:id/restore')
@@ -115,6 +159,8 @@ export class UsersController {
     status: 404,
     description: 'User not found or not soft-deleted',
   })
+  @RequirePermissions(Permission.USERS_UPDATE)
+  @ApiBearerAuth()
   public restoreUser(@Param('id', ParseIntPipe) id: number) {
     return this.userService.restoreUser(id);
   }
@@ -123,6 +169,8 @@ export class UsersController {
   @ApiOperation({ summary: 'Update user details' })
   @ApiResponse({ status: 200, description: 'User updated successfully' })
   @ApiResponse({ status: 400, description: 'Bad request' })
+  @RequirePermissions(Permission.USERS_UPDATE)
+  @ApiBearerAuth()
   public editedPost(@Body() edituserDto: EditUserDto) {
     return this.userService.editUser(edituserDto);
   }
@@ -134,6 +182,8 @@ export class UsersController {
     description: 'User and book created successfully',
   })
   @ApiResponse({ status: 400, description: 'Bad request' })
+  @RequirePermissions(Permission.USERS_CREATE)
+  @ApiBearerAuth()
   public createUserWithBook(@Body() userDto: CreateUserDto) {
     return this.userService.createUserWithBook(userDto);
   }
@@ -144,6 +194,8 @@ export class UsersController {
     status: 200,
     description: 'List of users with books retrieved successfully',
   })
+  @RequirePermissions(Permission.USERS_READ)
+  @ApiBearerAuth()
   public getAllUsersWithBook() {
     return this.userService.getAllUserWithBook();
   }
@@ -152,6 +204,8 @@ export class UsersController {
   @ApiOperation({ summary: 'Fetch a single user by ID' })
   @ApiResponse({ status: 200, description: 'User retrieved successfully' })
   @ApiResponse({ status: 404, description: 'User not found' })
+  @RequirePermissions(Permission.USERS_READ)
+  @ApiBearerAuth()
   public getUserbyId(@Param('id', ParseIntPipe) id: number) {
     return this.userService.findOneById(id);
   }

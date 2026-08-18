@@ -14,8 +14,10 @@ import {
 } from '@nestjs/swagger';
 import { LeaderboardProofService } from './leaderboard-proof.service';
 import { LeaderboardProofQueryDto, LeaderboardRankingQueryDto } from './leaderboard-proof.dto';
+import { Public } from 'src/auth/decorators/public/public.decorator';
 
 @ApiTags('Leaderboard')
+@Public()
 @Controller('leaderboard')
 export class LeaderboardController {
   constructor(private readonly leaderboardService: LeaderboardProofService) {}

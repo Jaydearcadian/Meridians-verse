@@ -9,6 +9,9 @@ import { RefreshToken } from '../entities/refresh-token.entity';
 import { HashingProvider } from './hashing';
 import { randomUUID } from 'crypto';
 import { CryptoProvider } from 'src/crypto/providers/crypto.provider';
+import { Role } from '../enums/role.enum';
+import { ROLE_PERMISSIONS } from '../enums/role-permissions';
+import { ActiveUserData } from '../interfaces/active-user-data.interface';
 
 // seperation of concern
 // this was generated to create access token and refresh token so we can use in signInProvider
@@ -53,9 +56,21 @@ export class GenerateTokenProvider {
   public async generateTokens(user: User) {
     const jti = randomUUID();
 
+    // Role-aware claims (issue #632): embed the user's role and the resolved
+    // permission list so the RbacGuard can authorize statelessly. `verified`
+    // mirrors `emailVerified` for consumers that gate on verification.
+    const role = user.role ?? Role.USER;
+    const accessClaims: ActiveUserData = {
+      sub: user.id,
+      email: user.email,
+      role,
+      permissions: ROLE_PERMISSIONS[role] ?? [],
+      verified: user.emailVerified,
+    };
+
     const [access_token, refresh_token] = await Promise.all([
       // generate access token
-      this.SignToken(user.id, this.jwtconfiguration.ttl, { email: user.email }),
+      this.SignToken(user.id, this.jwtconfiguration.ttl, accessClaims),
 
       // generate refresh token
       this.SignToken(user.id, this.jwtconfiguration.Rttl, { jti }),

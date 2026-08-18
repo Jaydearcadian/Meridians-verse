@@ -13,11 +13,16 @@ import {
   ApiQuery,
   ApiParam,
   ApiResponse,
+  ApiBearerAuth,
 } from '@nestjs/swagger';
 import { EventsService } from './events.service';
 import { AuditQueryDto } from './dto/audit-query.dto';
+import { RequireRoles } from 'src/auth/decorators/roles/roles.decorator';
+import { Role } from 'src/auth/enums/role.enum';
 
 @ApiTags('Audit')
+@RequireRoles(Role.ADMIN)
+@ApiBearerAuth()
 @Controller('audit')
 export class AuditController {
   constructor(private readonly eventsService: EventsService) {}
@@ -62,6 +67,18 @@ export class AuditController {
   @ApiResponse({ status: 200, description: 'Merkle proof bundle for public leaderboard verification' })
   async leaderboardProofs(@Query('limit') limit?: number) {
     return this.eventsService.getLeaderboardProofs(limit ?? 10);
+  }
+
+  /**
+   * Admin-only audit log review (issue #632): aggregate stats over the whole
+   * audit log (counts by action and contract, chain validity).
+   */
+  @Get('stats')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Audit log review stats (admin only, issue #632)' })
+  @ApiResponse({ status: 200, description: 'Aggregate audit statistics' })
+  async stats() {
+    return this.eventsService.getAuditStats();
   }
 
   @Get(':txHash')

@@ -11,6 +11,9 @@ import { CreateManyUser } from './createManyUser.Provider';
 import { CreateManyUsersDto } from '../dto/create-many-users.dto';
 import { CreateUserBookProvider } from './createUserWithBook';
 import { HashingProvider } from 'src/auth/providers/hashing';
+import { Role } from 'src/auth/enums/role.enum';
+import { Permission } from 'src/auth/enums/permission.enum';
+import { ROLE_PERMISSIONS } from 'src/auth/enums/role-permissions';
 
 @Injectable()
 export class UserService {
@@ -149,5 +152,36 @@ export class UserService {
 
   public async findOneById(id: number) {
     return await this.usersRepository.findOneBy({ id });
+  }
+
+  /**
+   * RBAC (issue #632): assign a new role to a user. Throws 404 when the user
+   * does not exist. Role changes take effect on the user's next sign-in since
+   * the stateless JWT keeps its original claims until then.
+   */
+  public async assignRole(id: number, role: Role) {
+    const user = await this.findOneId(id);
+    user.role = role;
+    await this.usersRepository.save(user);
+    return {
+      id: user.id,
+      role: user.role,
+      permissions: ROLE_PERMISSIONS[user.role] ?? [],
+    };
+  }
+
+  /**
+   * RBAC (issue #632): resolve a user's permission list from their role.
+   * Optionally filter down to a single permission for "does user have X?"
+   * checks. Throws 404 when the user does not exist.
+   */
+  public async getUserPermissions(id: number, permission?: Permission) {
+    const user = await this.findOneId(id);
+    const role = user.role ?? Role.USER;
+    const permissions = ROLE_PERMISSIONS[role] ?? [];
+    const filtered = permission
+      ? permissions.filter((p) => p === permission)
+      : permissions;
+    return { id: user.id, role, permissions: filtered };
   }
 }
