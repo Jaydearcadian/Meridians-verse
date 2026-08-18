@@ -8,8 +8,10 @@ import {
   DiskHealthIndicator,
 } from '@nestjs/terminus';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { Public } from 'src/auth/decorators/public/public.decorator';
 
 @SkipThrottle()
+@Public()
 @ApiTags('Health')
 @Controller('health')
 export class HealthController {
