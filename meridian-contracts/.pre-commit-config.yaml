@@ -92,6 +92,14 @@ repos:
         pass_filenames: false
         files: ^contracts/.*\.rs$
 
+      - id: cargo-test-verification
+        name: cargo test --features verification
+        entry: cargo test
+        language: system
+        args: [--features, verification, --lib, --bins]
+        pass_filenames: false
+        files: ^contracts/.*\.rs$
+
   # Documentation checks
   - repo: local
     hooks:

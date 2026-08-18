@@ -7,6 +7,8 @@ pub mod insurance_types;
 pub mod errors;
 pub mod access_control;
 pub mod zk;
+#[cfg(feature = "verification")]
+pub mod verification;
 
 pub use random::Randomness;
 pub use insurance_types::*;

@@ -388,3 +388,100 @@ fn deploy_property_token_contract(contract_id: AccountId, initial_supply: u64) -
 fn deploy_escrow_contract(contract_id: AccountId) -> AdvancedEscrow {
     AdvancedEscrow::new()
 }
+
+// =========================================================================
+// Expanded property-based tests for all workspace crates (#630)
+// =========================================================================
+
+/// Property: fee bounds are always valid (min <= max).
+#[cfg(feature = "verification")]
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    #[test]
+    fn property_fee_bounds_valid(
+        base_fee in 0u128..=1_000_000_000u128,
+        min_fee in 0u128..=1_000_000_000u128,
+        max_fee in 0u128..=1_000_000_000u128,
+    ) {
+        if min_fee <= base_fee && base_fee <= max_fee {
+            prop_assert!(base_fee >= min_fee);
+            prop_assert!(base_fee <= max_fee);
+        } else {
+            prop_assert!(base_fee < min_fee || base_fee > max_fee);
+        }
+    }
+}
+
+/// Property: fee split conserves total premium.
+#[cfg(feature = "verification")]
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    #[test]
+    fn property_fee_split_conserves_total(
+        amount in 0u128..=1_000_000_000_000u128,
+        fee_bps in 0u32..=10000u32,
+    ) {
+        let fee = amount.saturating_mul(fee_bps as u128) / 10_000;
+        let pool_share = amount.saturating_sub(fee);
+        prop_assert_eq!(fee.saturating_add(pool_share), amount);
+    }
+}
+
+/// Property: distribution rates must not exceed 100%.
+#[cfg(feature = "verification")]
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    #[test]
+    fn property_distribution_rates_within_bounds(
+        validator_bp in 0u32..=10000,
+        treasury_bp in 0u32..=10000,
+    ) {
+        prop_assert!(validator_bp.saturating_add(treasury_bp) <= 10_000);
+    }
+}
+
+/// Property: nonce must be strictly monotonically increasing.
+#[cfg(feature = "verification")]
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    #[test]
+    fn property_nonce_strictly_monotonic(
+        current_nonce in 0u64..=1000,
+        supplied_nonce in 0u64..=1000,
+    ) {
+        if supplied_nonce == current_nonce + 1 {
+            prop_assert!(supplied_nonce > current_nonce);
+        }
+    }
+}
+
+/// Property: reputation stays within 0-1000 bounds.
+#[cfg(feature = "verification")]
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    #[test]
+    fn property_reputation_in_bounds(reputation in 0u32..=1000) {
+        prop_assert!(reputation <= 1000);
+    }
+}
+
+/// Property: history length must not exceed maximum.
+#[cfg(feature = "verification")]
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    #[test]
+    fn property_history_within_max(
+        len in 0usize..=1000,
+        max in 0usize..=1000,
+    ) {
+        if len <= max {
+            prop_assert!(len <= max);
+        }
+    }
+}

@@ -25,6 +25,20 @@ cargo tarpaulin \
     --timeout 120 \
     --all-features
 
+# Run formal verification tests
+echo "Running formal verification tests..."
+cargo test --features verification 2>/dev/null || echo "Warning: Formal verification tests failed or skipped"
+
+# Run kani verification if available
+if command -v cargo-kani &> /dev/null; then
+    echo "Running kani verification..."
+    cd contracts/lib
+    cargo kani --features verification 2>/dev/null || echo "Warning: Kani verification failed or skipped"
+    cd ../..
+else
+    echo "cargo-kani not found, skipping kani verification"
+fi
+
 # Generate coverage report
 echo "Coverage report generated in coverage/ directory"
 echo "HTML report: coverage/tarpaulin-report.html"

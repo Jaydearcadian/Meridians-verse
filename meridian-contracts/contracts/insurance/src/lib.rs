@@ -166,3 +166,8 @@ pub use crate::propchain_insurance::{InsuranceError, PropertyInsurance};
 mod insurance_tests {
     include!("insurance_tests.rs");
 }
+
+#[cfg(all(test, feature = "verification"))]
+mod verification_tests {
+    include!("verification_tests.rs");
+}

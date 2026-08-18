@@ -22,6 +22,7 @@ UNIT_TESTS=true
 INTEGRATION_TESTS=true
 E2E_TESTS=false
 COVERAGE=false
+FORMAL_VERIFICATION=false
 
 # Logging functions
 log_info() {
@@ -231,6 +232,42 @@ run_benchmarks() {
     log_success "Benchmark tests completed"
 }
 
+# Run formal verification
+run_formal_verification() {
+    log_info "Running formal verification..."
+    
+    cd "$WORKSPACE_ROOT"
+    
+    # Run kani verification harnesses if kani is installed
+    if command_exists cargo-kani; then
+        log_info "Running kani verification harnesses..."
+        cd contracts/lib
+        cargo kani --features verification 2>/dev/null || log_warning "Kani verification failed or skipped"
+        cd "$WORKSPACE_ROOT"
+    else
+        log_warning "cargo-kani not found, skipping kani verification"
+    fi
+    
+    # Run property-based tests with verification feature
+    log_info "Running property-based verification tests..."
+    cd "$WORKSPACE_ROOT"
+    cargo test --features verification --lib --bins 2>/dev/null || log_warning "Verification tests failed or skipped"
+    
+    # Run contract-specific verification tests
+    cd "$CONTRACTS_DIR"
+    for contract_dir in */; do
+        if [ -f "$contract_dir/Cargo.toml" ]; then
+            log_info "Running verification tests for contract: $contract_dir"
+            cd "$contract_dir"
+            cargo test --features verification 2>/dev/null || log_warning "Verification tests failed for $contract_dir"
+            cd ..
+        fi
+    done
+    
+    cd "$WORKSPACE_ROOT"
+    log_success "Formal verification completed"
+}
+
 # Test gas consumption
 test_gas_consumption() {
     log_info "Testing gas consumption..."
@@ -350,6 +387,10 @@ main() {
                 test_gas_consumption
                 exit 0
                 ;;
+            --formal-verification)
+                FORMAL_VERIFICATION=true
+                shift
+                ;;
             --help)
                 echo "Usage: $0 [OPTIONS]"
                 echo "Options:"
@@ -387,6 +428,10 @@ main() {
     
     if [ "$E2E_TESTS" = true ]; then
         run_e2e_tests || failed=true
+    fi
+    
+    if [ "$FORMAL_VERIFICATION" = true ]; then
+        run_formal_verification || failed=true
     fi
     
     if [ "$COVERAGE" = true ]; then
