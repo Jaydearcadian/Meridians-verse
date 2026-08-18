@@ -5,7 +5,6 @@ import {
   HttpStatus,
   Post,
   Req,
-  UseGuards,
 } from '@nestjs/common';
 import { AuthService } from './providers/auth.service';
 import { SignInDto } from './dto/sign-in.dto';
@@ -20,7 +19,6 @@ import {
   ApiResponse,
   ApiBearerAuth,
 } from '@nestjs/swagger';
-import { AccessTokenGuard } from './guard/access-token/access-token.guard';
 import { Public } from './decorators/public/public.decorator';
 import { REQUEST_USER_KEY } from './constant/auth-constant';
 import { Request } from 'express';
@@ -86,8 +84,8 @@ export class AuthController {
     return this.authService.logout(logoutDto);
   }
 
+  // Authenticated via the global RbacGuard (default posture) — no @Public().
   @Post('/logout-all')
-  @UseGuards(AccessTokenGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Revoke all refresh tokens for the current user' })
   @ApiBearerAuth()

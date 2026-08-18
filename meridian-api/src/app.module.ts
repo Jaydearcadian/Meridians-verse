@@ -145,12 +145,12 @@ import { EventsModule } from './events/events.module';
     // RBAC (issue #632): global guard that authenticates every request unless
     // marked @Public() and enforces @RequireRoles / @RequirePermissions
     // metadata against the role/permission claims embedded in the JWT.
+    // APP_GUARD instantiates RbacGuard itself (no separate provider needed).
     {
       provide: APP_GUARD,
       useClass: RbacGuard,
     },
     AccessTokenGuard,
-    RbacGuard,
     MailProvider,
   ],
 })
