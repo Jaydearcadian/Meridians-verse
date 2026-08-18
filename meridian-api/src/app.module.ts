@@ -25,6 +25,7 @@ import { PaginationModule } from './common/pagination/pagination.module';
 import jwtConfig from './auth/config/jwt.config';
 import { DataResponseInterceptor } from './common/interceptors/data-response.interceptor';
 import { AccessTokenGuard } from './auth/guard/access-token/access-token.guard';
+import { RbacGuard } from './auth/guard/rbac/rbac.guard';
 import { MailProvider } from './mail/providers/mail.provider';
 import { TweetModule } from './tweets/tweet.module';
 import { UploadModule } from './upload/upload.module';
@@ -141,7 +142,15 @@ import { EventsModule } from './events/events.module';
       provide: APP_GUARD,
       useClass: CustomThrottlerGuard,
     },
+    // RBAC (issue #632): global guard that authenticates every request unless
+    // marked @Public() and enforces @RequireRoles / @RequirePermissions
+    // metadata against the role/permission claims embedded in the JWT.
+    {
+      provide: APP_GUARD,
+      useClass: RbacGuard,
+    },
     AccessTokenGuard,
+    RbacGuard,
     MailProvider,
   ],
 })
