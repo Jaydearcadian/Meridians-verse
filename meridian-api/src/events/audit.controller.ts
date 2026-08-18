@@ -61,10 +61,12 @@ export class AuditController {
     return this.eventsService.verifyHashChain();
   }
 
+  // Admin-only (class-level @RequireRoles(Role.ADMIN)). The public proof
+  // endpoint for external verification is GET /leaderboard/proof.
   @Get('leaderboard')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Build Merkle proofs for the latest leaderboard audit entries' })
-  @ApiResponse({ status: 200, description: 'Merkle proof bundle for public leaderboard verification' })
+  @ApiResponse({ status: 200, description: 'Merkle proof bundle for leaderboard audit review' })
   async leaderboardProofs(@Query('limit') limit?: number) {
     return this.eventsService.getLeaderboardProofs(limit ?? 10);
   }

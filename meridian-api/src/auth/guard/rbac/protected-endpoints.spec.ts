@@ -4,9 +4,6 @@ import { PostController } from '../../../post/post.controller';
 import { UploadController } from '../../../upload/upload.controller';
 import { LeaderboardController } from '../../../leaderboard/leaderboard-proof.controller';
 import { AuditController } from '../../../events/audit.controller';
-import { Public } from '../../decorators/public/public.decorator';
-import { RequireRoles } from '../../decorators/roles/roles.decorator';
-import { RequirePermissions } from '../../decorators/permissions/permissions.decorator';
 import { Role } from '../../enums/role.enum';
 import { Permission } from '../../enums/permission.enum';
 import {
