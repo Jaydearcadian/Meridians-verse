@@ -12,10 +12,20 @@ publish = false
 [dependencies]
 soroban-sdk = { workspace = true }
 
+[dependencies.kani]
+version = "0.60"
+workspace = true
+optional = true
+
+[dependencies.proptest]
+version = "1.4"
+workspace = true
+default-features = false
+features = ["std"]
+optional = true
+
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-kani = { workspace = true, optional = true }
-proptest = { workspace = true, optional = true }
 
 [lib]
 name = "propchain_bridge"

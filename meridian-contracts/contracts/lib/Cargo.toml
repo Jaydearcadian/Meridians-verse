@@ -10,9 +10,15 @@ publish = false
 [dependencies]
 soroban-sdk = { workspace = true }
 
-[dev-dependencies]
-kani = { workspace = true, optional = true }
-prusti-contracts = { workspace = true, optional = true }
+[dependencies.kani]
+version = "0.60"
+workspace = true
+optional = true
+
+[dependencies.prusti-contracts]
+version = "0.6"
+workspace = true
+optional = true
 
 [features]
 default = ["std"]

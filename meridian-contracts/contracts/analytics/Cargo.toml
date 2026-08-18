@@ -10,7 +10,7 @@ scale = { workspace = true }
 scale-info = { workspace = true }
 
 [dev-dependencies]
-proptest = { workspace = true, optional = true }
+proptest = { workspace = true }
 
 [lib]
 path = "src/lib.rs"

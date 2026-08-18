@@ -11,6 +11,18 @@ publish = false
 soroban-sdk = { workspace = true }
 stellar-insured-lib = { path = "../lib" }
 
+[dependencies.kani]
+version = "0.60"
+workspace = true
+optional = true
+
+[dependencies.proptest]
+version = "1.4"
+workspace = true
+default-features = false
+features = ["std"]
+optional = true
+
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 stellar-insured-policy = { path = "../policy", features = ["testutils"] }
@@ -18,8 +30,6 @@ stellar-insured-risk-pool = { path = "../risk_pool", features = ["testutils"] }
 stellar-insured-governance = { path = "../governance", features = ["testutils"] }
 stellar-insured-slashing = { path = "../slashing", features = ["testutils"] }
 propchain-escrow = { path = "../escrow", features = ["testutils"] }
-kani = { workspace = true, optional = true }
-proptest = { workspace = true, optional = true }
 
 [lib]
 name = "stellar_insured_claims"

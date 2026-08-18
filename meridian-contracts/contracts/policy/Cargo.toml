@@ -11,10 +11,17 @@ publish = false
 soroban-sdk = { workspace = true }
 stellar-insured-lib = { path = "../lib" }
 
-[dev-dependencies]
-soroban-sdk = { workspace = true, features = ["testutils"] }
-kani = { workspace = true, optional = true }
-proptest = { workspace = true, optional = true }
+[dependencies.kani]
+version = "0.60"
+workspace = true
+optional = true
+
+[dependencies.proptest]
+version = "1.4"
+workspace = true
+default-features = false
+features = ["std"]
+optional = true
 
 [lib]
 name = "stellar_insured_policy"

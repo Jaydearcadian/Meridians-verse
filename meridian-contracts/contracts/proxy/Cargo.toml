@@ -11,7 +11,7 @@ scale-info = { workspace = true, features = ["std"] }
 propchain-traits = { path = "../traits" }
 
 [dev-dependencies]
-proptest = { workspace = true, optional = true }
+proptest = { workspace = true }
 
 [lib]
 name = "propchain_proxy"

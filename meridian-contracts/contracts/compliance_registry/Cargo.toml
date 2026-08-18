@@ -12,7 +12,7 @@ propchain-traits = { path = "../traits", default-features = false }
 
 [dev-dependencies]
 ink_e2e = "5.0.0"
-proptest = { workspace = true, optional = true }
+proptest = { workspace = true }
 
 [lib]
 path = "lib.rs"

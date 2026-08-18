@@ -19,6 +19,7 @@ ark-serialize = { version = "0.4", default-features = false, optional = true }
 ink_e2e = "5.0.0"
 ark-std = { version = "0.4", default-features = false, features = ["std"] }
 ark-relations = { version = "0.4", default-features = false, features = ["std"] }
+proptest = { workspace = true }
 
 [lib]
 path = "lib.rs"

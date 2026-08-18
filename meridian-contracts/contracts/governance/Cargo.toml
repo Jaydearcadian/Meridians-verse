@@ -11,6 +11,18 @@ publish = false
 soroban-sdk = { workspace = true }
 stellar-insured-lib = { path = "../lib" }
 
+[dependencies.kani]
+version = "0.60"
+workspace = true
+optional = true
+
+[dependencies.proptest]
+version = "1.4"
+workspace = true
+default-features = false
+features = ["std"]
+optional = true
+
 [dev-dependencies]
 # #601: cross-contract integration tests for the slashing execution pipeline.
 # `testutils` is required so these crates' ContractFunctionSet impls (used by
@@ -20,8 +32,6 @@ stellar-insured-slashing = { path = "../slashing", features = ["testutils"] }
 stellar-insured-risk-pool = { path = "../risk_pool", features = ["testutils"] }
 # #609: cross-contract integration tests for the policy-change execution pipeline.
 stellar-insured-policy = { path = "../policy", features = ["testutils"] }
-kani = { workspace = true, optional = true }
-proptest = { workspace = true, optional = true }
 
 [lib]
 name = "stellar_insured_governance"

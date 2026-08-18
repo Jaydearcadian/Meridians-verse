@@ -17,7 +17,7 @@ stellar-insured-lib = { path = "../contracts/lib" }
 
 [dev-dependencies]
 proptest = { version = "1.4", default-features = false, features = ["std"] }
-kani = { workspace = true, optional = true }
+kani = { workspace = true }
 stellar-insured-risk-pool = { path = "../contracts/risk_pool", features = ["testutils"] }
 stellar-insured-claims = { path = "../contracts/claims", features = ["testutils"] }
 stellar-insured-governance = { path = "../contracts/governance", features = ["testutils"] }
