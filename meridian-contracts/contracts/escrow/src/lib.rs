@@ -8,6 +8,7 @@ mod validation;
 mod migration_test;
 
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
+use stellar_insured_lib::events::emit_event_with;
 use stellar_insured_lib::{EscrowError, ValidationError};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 
@@ -41,8 +42,7 @@ impl AdvancedEscrow {
 
         access_control::init_access_control(&env, &admin);
 
-        env.events()
-            .publish((symbol_short!("escrow"), symbol_short!("init")), admin);
+        emit_event_with(&env, symbol_short!("ESCROW"), symbol_short!("INIT"), &admin);
         Ok(())
     }
 
@@ -52,8 +52,7 @@ impl AdvancedEscrow {
         access_control::require_role(&env, &admin, &AccessControlRole::Admin);
         env.storage().instance().set(&DataKey::Paused, &paused);
 
-        env.events()
-            .publish((symbol_short!("escrow"), symbol_short!("pause")), paused);
+        emit_event_with(&env, symbol_short!("ESCROW"), symbol_short!("PAUSE"), &paused);
         Ok(())
     }
 
@@ -131,10 +130,11 @@ impl AdvancedEscrow {
             .persistent()
             .set(&DataKey::MultiSig(count), &config);
 
-        // Standardized event format: (contract, action) topics + structured payload (#352).
-        env.events().publish(
-            (symbol_short!("escrow"), symbol_short!("created")),
-            (count, property_id, amount),
+        emit_event_with(
+            &env,
+            symbol_short!("ESCROW"),
+            symbol_short!("CREATED"),
+            &(count, property_id, amount),
         );
 
         Ok(count)
@@ -174,9 +174,11 @@ impl AdvancedEscrow {
             .persistent()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events().publish(
-            (symbol_short!("escrow"), symbol_short!("funded")),
-            (escrow_id, amount),
+        emit_event_with(
+            &env,
+            symbol_short!("ESCROW"),
+            symbol_short!("FUNDED"),
+            &(escrow_id, amount),
         );
         Ok(())
     }
@@ -223,9 +225,11 @@ impl AdvancedEscrow {
             .persistent()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events().publish(
-            (symbol_short!("escrow"), symbol_short!("released")),
-            (escrow_id, amount),
+        emit_event_with(
+            &env,
+            symbol_short!("ESCROW"),
+            symbol_short!("RELEASED"),
+            &(escrow_id, amount),
         );
         Ok(())
     }
@@ -270,9 +274,11 @@ impl AdvancedEscrow {
             .persistent()
             .set(&DataKey::SigCount(escrow_id, approval_type), &count);
 
-        env.events().publish(
-            (symbol_short!("escrow"), symbol_short!("signed")),
-            (escrow_id, signer, count),
+        emit_event_with(
+            &env,
+            symbol_short!("ESCROW"),
+            symbol_short!("SIGNED"),
+            &(escrow_id, signer, count),
         );
         Ok(())
     }
@@ -308,8 +314,7 @@ impl AdvancedEscrow {
             _ => return Err(EscrowError::InvalidStatus),
         }
 
-        env.events()
-            .publish((symbol_short!("escrow"), symbol_short!("migrated")), to_version);
+        emit_event_with(&env, symbol_short!("ESCROW"), symbol_short!("MIGRATED"), &to_version);
         Ok(())
     }
 }

@@ -3,6 +3,7 @@
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, IntoVal};
 use stellar_insured_lib::{InsuranceClaim, ClaimStatus, InsurancePolicy, PolicyStatus, PoolStats};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
+use stellar_insured_lib::events::emit_event_with;
 
 #[contracttype]
 #[derive(Clone)]
@@ -107,11 +108,8 @@ impl ClaimsContract {
         // #409: Record the active claim for this policy (O(1) dedup key)
         env.storage().persistent().set(&DataKey::PolicyActiveClaim(policy_id), &counter);
 
-        // #412: Enhanced event emission with more details
-        env.events().publish(
-            (symbol_short!("claim"), symbol_short!("submitted")),
-            (counter, policy_id, claimant.clone(), amount),
-        );
+        // Canonical, indexed event emission (see stellar_insured_lib::events).
+        emit_event_with(&env, symbol_short!("CLAIMS"), symbol_short!("SUBMITTED"), &claim);
 
         counter
     }
@@ -128,11 +126,7 @@ impl ClaimsContract {
         claim.status = ClaimStatus::UnderReview;
         set_claim(&env, claim_id, &claim);
 
-        // #412: Enhanced event emission
-        env.events().publish(
-            (symbol_short!("claim"), symbol_short!("review")),
-            (claim_id, claim.policy_id, claim.amount),
-        );
+        emit_event_with(&env, symbol_short!("CLAIMS"), symbol_short!("REVIEW"), &claim);
     }
 
     pub fn approve_claim(env: Env, claim_id: u64) {
@@ -147,11 +141,7 @@ impl ClaimsContract {
         claim.status = ClaimStatus::Approved;
         set_claim(&env, claim_id, &claim);
 
-        // #412: Enhanced event emission
-        env.events().publish(
-            (symbol_short!("claim"), symbol_short!("approved")),
-            (claim_id, claim.policy_id, claim.amount, claim.claimant),
-        );
+        emit_event_with(&env, symbol_short!("CLAIMS"), symbol_short!("APPROVED"), &claim);
     }
 
     pub fn reject_claim(env: Env, claim_id: u64) {
@@ -169,11 +159,7 @@ impl ClaimsContract {
         // #409: Clear the active-claim lock so a new claim can be submitted for this policy
         env.storage().persistent().remove(&DataKey::PolicyActiveClaim(claim.policy_id));
 
-        // #412: Enhanced event emission
-        env.events().publish(
-            (symbol_short!("claim"), symbol_short!("rejected")),
-            (claim_id, claim.policy_id, claim.amount),
-        );
+        emit_event_with(&env, symbol_short!("CLAIMS"), symbol_short!("REJECTED"), &claim);
     }
 
     pub fn settle_claim(env: Env, claim_id: u64) {
@@ -223,11 +209,7 @@ impl ClaimsContract {
         // #409: Clear the active-claim lock after settlement
         env.storage().persistent().remove(&DataKey::PolicyActiveClaim(claim.policy_id));
 
-        // #412: Enhanced event emission
-        env.events().publish(
-            (symbol_short!("claim"), symbol_short!("settled")),
-            (claim_id, claim.amount, claim.claimant),
-        );
+        emit_event_with(&env, symbol_short!("CLAIMS"), symbol_short!("SETTLED"), &claim);
     }
 
     pub fn get_claim(env: Env, claim_id: u64) -> InsuranceClaim {

@@ -1,6 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
+use stellar_insured_lib::events::emit_event_with;
 use stellar_insured_lib::{InsurancePolicy, PolicyParams, PolicyPatch, PolicyStatus, PolicyType, StatusPatch};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 
@@ -110,10 +111,11 @@ impl PolicyContract {
 
         set_policy(&env, counter, &policy);
 
-        // #412: Enhanced event emission with more details
-        env.events().publish(
-            (symbol_short!("policy"), symbol_short!("issued")),
-            (counter, holder, coverage_amount, premium_amount, duration_days),
+        emit_event_with(
+            &env,
+            symbol_short!("POLICY"),
+            symbol_short!("ISSUED"),
+            &(counter, holder, coverage_amount, premium_amount, duration_days),
         );
 
         counter
@@ -159,10 +161,11 @@ impl PolicyContract {
 
         set_policy(&env, policy_id, &policy);
 
-        // #412: Enhanced event emission
-        env.events().publish(
-            (symbol_short!("policy"), symbol_short!("renewed")),
-            (policy_id, policy.holder, duration_days),
+        emit_event_with(
+            &env,
+            symbol_short!("POLICY"),
+            symbol_short!("RENEWED"),
+            &(policy_id, policy.holder, duration_days),
         );
     }
 
@@ -180,10 +183,11 @@ impl PolicyContract {
         policy.status = PolicyStatus::Cancelled;
         set_policy(&env, policy_id, &policy);
 
-        // #412: Enhanced event emission
-        env.events().publish(
-            (symbol_short!("policy"), symbol_short!("cancelled")),
-            (policy_id, policy.holder, policy.coverage_amount),
+        emit_event_with(
+            &env,
+            symbol_short!("POLICY"),
+            symbol_short!("CANCELED"),
+            &(policy_id, policy.holder, policy.coverage_amount),
         );
     }
 
@@ -243,10 +247,7 @@ impl PolicyContract {
 
         set_policy(&env, policy_id, &policy);
 
-        env.events().publish(
-            (symbol_short!("policy"), symbol_short!("gov_upd")),
-            policy_id,
-        );
+        emit_event_with(&env, symbol_short!("POLICY"), symbol_short!("GOV_UPD"), &policy_id);
     }
 
     // #609: DAO-governed parameter update. Same trust model as
@@ -262,9 +263,11 @@ impl PolicyContract {
 
         env.storage().instance().set(&DataKey::PolicyParams, &params);
 
-        env.events().publish(
-            (symbol_short!("policy"), symbol_short!("params")),
-            (params.max_coverage_amount, params.min_premium_amount),
+        emit_event_with(
+            &env,
+            symbol_short!("POLICY"),
+            symbol_short!("PARAMS"),
+            &(params.max_coverage_amount, params.min_premium_amount),
         );
     }
 
@@ -296,10 +299,11 @@ impl PolicyContract {
         policy.status = PolicyStatus::Expired;
         set_policy(&env, policy_id, &policy);
 
-        // #412: Enhanced event emission
-        env.events().publish(
-            (symbol_short!("policy"), symbol_short!("expired")),
-            (policy_id, policy.holder),
+        emit_event_with(
+            &env,
+            symbol_short!("POLICY"),
+            symbol_short!("EXPIRED"),
+            &(policy_id, policy.holder),
         );
     }
 

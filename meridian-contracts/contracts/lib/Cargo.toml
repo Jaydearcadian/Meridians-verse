@@ -25,6 +25,9 @@ default = ["std"]
 std = ["soroban-sdk/std"]
 verification = ["std", "kani", "prusti-contracts"]
 
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+
 [lib]
 name = "stellar_insured_lib"
 path = "src/lib.rs"

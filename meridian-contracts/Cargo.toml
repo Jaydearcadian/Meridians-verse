@@ -36,8 +36,12 @@ ark-snark = { version = "0.4", default-features = false }
 ark-serialize = { version = "0.4", default-features = false }
 # Formal verification and property-based testing (workspace-level; individual crates
 # opt-in via dev-dependencies and feature flags).
-kani = { version = "0.60" }
-prusti-contracts = { version = "0.6" }
+# NOTE: `kani` is only ever published to crates.io as 0.0.1 (the real 0.60+ series
+# ships in the model-checking/kani git repo and is injected by the `cargo kani`
+# toolchain). `prusti-contracts` max published version is 0.2.0. Corrected the
+# specifiers so the workspace resolves under a stable toolchain.
+kani = { version = "0.0.1" }
+prusti-contracts = { version = "0.2" }
 proptest = { version = "1.4", default-features = false, features = ["std"] }
 proptest-macro = { version = "1.4" }
 

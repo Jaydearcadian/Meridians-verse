@@ -3,6 +3,7 @@
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, Symbol, IntoVal};
 use stellar_insured_lib::{Proposal, GovernanceAction, GovernanceError, PolicyPatch};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
+use stellar_insured_lib::events::emit_event_with;
 
 #[contracttype]
 #[derive(Clone)]
@@ -86,11 +87,8 @@ impl GovernanceContract {
         env.storage().instance().set(&DataKey::PolicyContract, &policy_contract);
         access_control::init_access_control(&env, &admin);
 
-        // #379: emit event for initialization
-        env.events().publish(
-            (symbol_short!("admin"), symbol_short!("init")),
-            admin,
-        );
+        // Canonical, indexed event emission (see stellar_insured_lib::events).
+        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("INIT"), &admin);
         Ok(())
     }
 
@@ -132,10 +130,7 @@ impl GovernanceContract {
 
         set_proposal(&env, counter, &proposal);
 
-        env.events().publish(
-            (symbol_short!("gov"), symbol_short!("created")),
-            (counter, creator),
-        );
+        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("CREATED"), &proposal);
 
         Ok(counter)
     }
@@ -178,10 +173,7 @@ impl GovernanceContract {
         let action = GovernanceAction::Slashing(target.clone(), role.clone(), amount);
         env.storage().persistent().set(&DataKey::GovernanceActionPending(counter), &action);
 
-        env.events().publish(
-            (symbol_short!("gov"), symbol_short!("slash_p")),
-            (counter, target, role, amount),
-        );
+        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("SLASH_PRO"), &proposal);
 
         Ok(counter)
     }
@@ -226,10 +218,7 @@ impl GovernanceContract {
         let action = GovernanceAction::ClaimApproval(claim_id);
         env.storage().persistent().set(&DataKey::GovernanceActionPending(counter), &action);
 
-        env.events().publish(
-            (symbol_short!("gov"), symbol_short!("claim_pr")),
-            (counter, claim_id, creator),
-        );
+        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("CLAIM_PRO"), &proposal);
 
         Ok(counter)
     }
@@ -275,10 +264,7 @@ impl GovernanceContract {
         let action = GovernanceAction::FundAllocation(recipient.clone(), amount);
         env.storage().persistent().set(&DataKey::GovernanceActionPending(counter), &action);
 
-        env.events().publish(
-            (symbol_short!("gov"), symbol_short!("fund_prop")),
-            (counter, recipient, amount, creator),
-        );
+        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("FUND_PROP"), &proposal);
 
         Ok(counter)
     }
@@ -324,10 +310,7 @@ impl GovernanceContract {
         let action = GovernanceAction::PolicyChange(policy_id, patch);
         env.storage().persistent().set(&DataKey::GovernanceActionPending(counter), &action);
 
-        env.events().publish(
-            (symbol_short!("gov"), symbol_short!("pol_prop")),
-            (counter, policy_id, creator),
-        );
+        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("POLICY_PR"), &proposal);
 
         Ok(counter)
     }
@@ -362,10 +345,7 @@ impl GovernanceContract {
         set_proposal(&env, proposal_id, &proposal);
         env.storage().persistent().set(&record_key, &record);
 
-        env.events().publish(
-            (symbol_short!("gov"), symbol_short!("vote")),
-            (proposal_id, voter),
-        );
+        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("VOTE"), &record);
         Ok(())
     }
 
@@ -379,10 +359,7 @@ impl GovernanceContract {
         proposal.is_finalized = true;
         set_proposal(&env, proposal_id, &proposal);
 
-        env.events().publish(
-            (symbol_short!("gov"), symbol_short!("final")),
-            proposal_id,
-        );
+        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("FINAL"), &proposal);
         Ok(())
     }
 
@@ -472,9 +449,11 @@ impl GovernanceContract {
                     );
 
                     // 3. Emit a structured Slashed event from governance.
-                    env.events().publish(
-                        (symbol_short!("gov"), symbol_short!("slashed")),
-                        (proposal_id, target, role, amount),
+                    emit_event_with(
+                        &env,
+                        symbol_short!("GOV"),
+                        symbol_short!("SLASHED"),
+                        &(proposal_id, target.clone(), role.clone(), amount),
                     );
                 }
             }
@@ -486,12 +465,7 @@ impl GovernanceContract {
         proposal.is_executed = true;
         set_proposal(&env, proposal_id, &proposal);
 
-        // #379: emit event for admin/governance action
-        // #412: Enhanced event emission
-        env.events().publish(
-            (symbol_short!("admin"), symbol_short!("exec")),
-            (proposal_id, proposal.creator),
-        );
+        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("EXECUTED"), &proposal);
         Ok(())
     }
 
