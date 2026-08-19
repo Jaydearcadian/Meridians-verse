@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Tweet } from './entities/tweet.entity';
 import { Repository } from 'typeorm';
 import { UserService } from 'src/users/providers/user.services';
@@ -8,6 +8,8 @@ import { UpdateTweetDto } from './dto/update-tweet.dto';
 
 @Injectable()
 export class TweetService {
+  private readonly logger = new Logger(TweetService.name);
+
   constructor(
     @InjectRepository(Tweet)
     private tweetRepository: Repository<Tweet>,
@@ -22,7 +24,9 @@ export class TweetService {
       throw new NotFoundException(`User with ${userId} not found`);
     }
 
-    console.log(user);
+    this.logger.debug(
+      JSON.stringify({ msg: 'tweet.getAllTweet', userId: user.id }),
+    );
 
     return await this.tweetRepository.find({
       where: { user: { id: userId } },

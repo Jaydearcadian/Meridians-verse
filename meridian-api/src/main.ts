@@ -92,6 +92,16 @@ async function bootstrap() {
     .setTermsOfService('http://localhost:3000/terms of service')
     .setVersion('1.0') // Set the API version
     .addBearerAuth()
+    .addApiKey(
+      {
+        type: 'apiKey',
+        name: 'X-Correlation-ID',
+        in: 'header',
+        description:
+          'Optional request correlation ID. Generated if omitted. Echoed on every response as X-Correlation-ID.',
+      },
+      'correlation-id',
+    )
     .build();
 
   const document = SwaggerModule.createDocument(app, config);

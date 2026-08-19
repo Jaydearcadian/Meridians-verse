@@ -80,4 +80,8 @@ export class AuditLog {
 
   @Column({ type: 'int', nullable: true })
   epochNumber: number | null;
+
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  @Index()
+  correlationId: string | null;
 }

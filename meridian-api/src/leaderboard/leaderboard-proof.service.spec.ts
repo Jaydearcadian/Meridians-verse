@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { LeaderboardProofService } from './leaderboard-proof.service';
 import { LeaderboardEpoch } from './leaderboard-epoch.entity';
 import { AuditLog } from '../audit/audit-log.entity';
+import { CorrelationIdStore } from '../common/correlation/correlation-id.store';
 
 describe('LeaderboardProofService', () => {
   let service: LeaderboardProofService;
@@ -37,6 +38,10 @@ describe('LeaderboardProofService', () => {
         LeaderboardProofService,
         { provide: getRepositoryToken(LeaderboardEpoch), useValue: mockEpochRepo },
         { provide: getRepositoryToken(AuditLog), useValue: mockAuditRepo },
+        {
+          provide: CorrelationIdStore,
+          useValue: { get: () => 'test-correlation', run: (_id: string, fn: () => unknown) => fn() },
+        },
       ],
     }).compile();
 

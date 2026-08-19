@@ -7,6 +7,7 @@ import { WebhookController } from './webhook.controller';
 import { Webhook } from './webhook.entity';
 import { LeaderboardProofModule } from '../leaderboard/leaderboard-proof.module';
 import { CryptoModule } from 'src/crypto/crypto.module';
+import { CorrelationModule } from '../common/correlation/correlation.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { CryptoModule } from 'src/crypto/crypto.module';
     AuditModule,
     LeaderboardProofModule,
     CryptoModule,
+    CorrelationModule,
   ],
   providers: [EventsService],
   controllers: [AuditController, WebhookController],

@@ -33,6 +33,8 @@ import { HealthModule } from './health/health.module';
 import { PrometheusModule } from '@willsoto/nestjs-prometheus';
 import { AuditModule } from './audit/audit.module';
 import { EventsModule } from './events/events.module';
+import { CorrelationModule } from './common/correlation/correlation.module';
+import { CorrelationIdInterceptor } from './common/correlation/correlation-id.interceptor';
 
 @Module({
   imports: [
@@ -128,6 +130,7 @@ import { EventsModule } from './events/events.module';
     PrometheusModule.register(),
     AuditModule,
     EventsModule,
+    CorrelationModule,
   ],
 
   controllers: [AppController],
@@ -137,6 +140,10 @@ import { EventsModule } from './events/events.module';
     {
       provide: APP_INTERCEPTOR,
       useClass: DataResponseInterceptor,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: CorrelationIdInterceptor,
     },
     {
       provide: APP_GUARD,
