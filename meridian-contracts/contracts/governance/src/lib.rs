@@ -315,6 +315,45 @@ impl GovernanceContract {
         Ok(counter)
     }
 
+    /// Create a proposal that schedules a timed pause on another contract.
+    pub fn create_pause_proposal(
+        env: Env,
+        creator: Address,
+        target_contract: Address,
+        duration_seconds: u64,
+        threshold: u32,
+    ) -> Result<u64, GovernanceError> {
+        creator.require_auth();
+        if duration_seconds == 0 {
+            return Err(GovernanceError::InvalidPauseDuration);
+        }
+
+        let mut counter = get_proposal_counter(&env);
+        counter += 1;
+        env.storage().instance().set(&DataKey::ProposalCounter, &counter);
+
+        let proposal = Proposal {
+            id: counter,
+            title: String::from_str(&env, "Circuit Breaker Pause"),
+            description: String::from_str(&env, "Governance-scheduled contract pause"),
+            execution_data: String::from_str(&env, "pause_contract"),
+            creator,
+            expires_at: env.ledger().timestamp() + get_voting_period(&env),
+            threshold_percentage: threshold,
+            yes_votes: 0,
+            no_votes: 0,
+            is_finalized: false,
+            is_executed: false,
+        };
+        set_proposal(&env, counter, &proposal);
+        env.storage().persistent().set(
+            &DataKey::GovernanceActionPending(counter),
+            &GovernanceAction::PauseContract(target_contract, duration_seconds),
+        );
+        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("PAUSE_PR"), &proposal);
+        Ok(counter)
+    }
+
     pub fn vote(env: Env, voter: Address, proposal_id: u64, weight: i128, is_yes: bool) -> Result<(), GovernanceError> {
         voter.require_auth();
 
@@ -456,6 +495,23 @@ impl GovernanceContract {
                         &(proposal_id, target.clone(), role.clone(), amount),
                     );
                 }
+                GovernanceAction::PauseContract(target_contract, duration_seconds) => {
+                    env.invoke_contract::<()>(
+                        &target_contract,
+                        &Symbol::new(&env, "pause"),
+                        soroban_sdk::vec![
+                            &env,
+                            env.current_contract_address().into_val(&env),
+                            duration_seconds.into_val(&env),
+                        ],
+                    );
+                    emit_event_with(
+                        &env,
+                        symbol_short!("GOV"),
+                        symbol_short!("PAUSE_EX"),
+                        &(proposal_id, target_contract, duration_seconds),
+                    );
+                }
             }
 
             // Remove the pending action
@@ -567,6 +623,29 @@ mod tests {
             assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
         });
     }
+
+    #[test]
+    fn test_pause_proposal_stores_target_and_duration() {
+        let (env, contract, _admin) = setup();
+        let creator = Address::generate(&env);
+        let target = Address::generate(&env);
+        env.as_contract(&contract, || {
+            let proposal_id = GovernanceContract::create_pause_proposal(
+                env.clone(),
+                creator,
+                target.clone(),
+                7_200,
+                60,
+            )
+            .unwrap();
+            let action: GovernanceAction = env
+                .storage()
+                .persistent()
+                .get(&DataKey::GovernanceActionPending(proposal_id))
+                .unwrap();
+            assert_eq!(action, GovernanceAction::PauseContract(target, 7_200));
+        });
+    }
 }
 
 // #601: end-to-end slashing pipeline (Governance -> Slashing -> Risk Pool).
@@ -576,6 +655,7 @@ mod slashing_pipeline_tests {
     use soroban_sdk::testutils::{Address as _, Ledger as _};
     use soroban_sdk::{token, Address, Env, String, Symbol};
     use stellar_insured_lib::access_control::AccessControlRole;
+    use stellar_insured_lib::circuit_breaker::PAUSE_TIMELOCK_SECONDS;
     use stellar_insured_risk_pool::{RiskPoolContract, RiskPoolContractClient};
     use stellar_insured_slashing::{SlashingContract, SlashingContractClient};
 
@@ -752,6 +832,25 @@ mod slashing_pipeline_tests {
         assert_eq!(pool.get_provider_info(&h.target), INITIAL_STAKE);
         assert_eq!(pool.get_pool_stats().available_capital, INITIAL_STAKE);
         assert_eq!(slashing.get_violation_count(&h.target, &h.role), 0);
+    }
+
+    #[test]
+    fn passing_pause_proposal_schedules_target_circuit_breaker() {
+        let h = setup();
+        let gov = h.gov();
+        let slashing = h.slashing();
+
+        let proposal_id = gov.create_pause_proposal(&h.creator, &h.slash_id, &7_200, &50);
+        gov.vote(&h.voter, &proposal_id, &100, &true);
+        h.advance_past_voting_period();
+        gov.finalize_proposal(&proposal_id);
+        gov.execute_proposal(&proposal_id);
+
+        assert!(!slashing.is_paused());
+        h.env.ledger().with_mut(|ledger| {
+            ledger.timestamp += PAUSE_TIMELOCK_SECONDS;
+        });
+        assert!(slashing.is_paused());
     }
 }
 

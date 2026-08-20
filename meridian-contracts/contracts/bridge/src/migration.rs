@@ -51,7 +51,7 @@ impl BridgeMigrationManager {
             MigrationStep {
                 step_id: 1,
                 operation: MigrationOperation::AddField,
-                description: String::from_str(&env, "Add emergency_pause field to BridgeConfig"),
+                description: String::from_str(&env, "Initialize shared CircuitBreaker state"),
                 from_version: 1,
                 to_version: 2,
                 storage_key_pattern: String::from_str(&env, "Config"),
@@ -123,16 +123,15 @@ impl BridgeMigrationManager {
         }
     }
 
-    /// Migrate BridgeConfig to v2 (add emergency_pause and metadata_preservation)
+    /// Migrate BridgeConfig to v2 and initialize metadata preservation.
     fn migrate_config_v2(&self, env: &Env) -> Result<(), MigrationError> {
+        stellar_insured_lib::circuit_breaker::init(env);
         let mut config: BridgeConfig = env
             .storage()
             .instance()
             .get(&DataKey::Config)
             .ok_or(MigrationError::StorageCorruption)?;
 
-        // Add new fields with default values
-        config.emergency_pause = false;
         config.metadata_preservation = true;
 
         env.storage().instance().set(&DataKey::Config, &config);

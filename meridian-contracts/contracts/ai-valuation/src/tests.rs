@@ -248,14 +248,16 @@ mod tests {
     fn test_pause_resume_works() {
         let mut engine = setup_ai_engine();
         
-        // Pause contract
-        assert!(engine.pause().is_ok());
+        // Emergency pause activates immediately.
+        assert!(engine.emergency_pause().is_ok());
         
         // Operations should fail when paused
         let model = create_sample_model();
         assert_eq!(engine.register_model(model), Err(AIValuationError::ContractPaused));
         
-        // Resume contract
+        // Resume is a two-step, timelocked admin operation.
+        assert!(engine.resume().is_ok());
+        test::set_block_timestamp::<ink::env::DefaultEnvironment>(3_600_000);
         assert!(engine.resume().is_ok());
         
         // Operations should work again

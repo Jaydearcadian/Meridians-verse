@@ -2,6 +2,7 @@
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, Symbol};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
+use stellar_insured_lib::circuit_breaker;
 use stellar_insured_lib::events::emit_event_with;
 
 // Maximum slashing history entries per (target, role) to prevent storage bloat (#380)
@@ -17,7 +18,6 @@ pub enum DataKey {
     ViolationCount(Address, Symbol),
     History(Address, Symbol),
     SlashableRoles,
-    Paused,
 }
 
 #[contracttype]
@@ -41,7 +41,7 @@ pub struct SlashingRecord {
 // --- Storage helpers (#378: data access abstraction) ---
 
 fn is_paused(env: &Env) -> bool {
-    env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+    circuit_breaker::is_paused(env)
 }
 
 fn get_slashable_roles(env: &Env) -> Vec<Symbol> {
@@ -74,9 +74,15 @@ impl SlashingContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Governance, &governance);
         env.storage().instance().set(&DataKey::RiskPool, &risk_pool);
-        env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::SlashableRoles, &Vec::<Symbol>::new(&env));
         access_control::init_access_control(&env, &admin);
+        access_control::set_role(
+            &env,
+            &admin,
+            &governance,
+            AccessControlRole::Governance,
+        );
+        circuit_breaker::init(&env);
 
         emit_event_with(
             &env,
@@ -184,24 +190,20 @@ impl SlashingContract {
         emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("ROLE_RM"), &role);
     }
 
-    pub fn pause(env: Env) {
-        let caller = env.current_contract_address();
-        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
-        env.storage().instance().set(&DataKey::Paused, &true);
-
-        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("PAUSED"), &true);
-
-        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("PAUSED"), &true);
+    pub fn pause(env: Env, governance: Address, duration_seconds: u64) {
+        circuit_breaker::pause(&env, &governance, duration_seconds);
     }
 
-    pub fn unpause(env: Env) {
-        let caller = env.current_contract_address();
-        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
-        env.storage().instance().set(&DataKey::Paused, &false);
+    pub fn resume(env: Env, admin: Address) {
+        circuit_breaker::resume(&env, &admin);
+    }
 
-        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("UNPAUSED"), &false);
+    pub fn emergency_pause(env: Env, governance: Address) {
+        circuit_breaker::emergency_pause(&env, &governance);
+    }
 
-        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("UNPAUSED"), &false);
+    pub fn is_paused(env: Env) -> bool {
+        circuit_breaker::is_paused(&env)
     }
 }
 
@@ -258,8 +260,7 @@ mod tests {
         let (env, contract, admin, governance) = setup();
         env.as_contract(&contract, || {
             assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
-            // Governance address is stored but role must be granted separately via set_role
-            assert!(!access_control::has_role(&env, &governance, &AccessControlRole::Governance));
+            assert!(access_control::has_role(&env, &governance, &AccessControlRole::Governance));
         });
     }
 

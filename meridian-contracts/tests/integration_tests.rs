@@ -613,6 +613,95 @@ fn test_cross_contract_data_consistency() {
     assert_eq!(escrow_data.3, escrow_amount); // Amount consistency
 }
 
+mod circuit_breaker_race_tests {
+    use stellar_insured_lib::circuit_breaker::{
+        CircuitBreaker, CircuitBreakerError, CircuitBreakerState, CircuitBreakerTransition,
+        PAUSE_TIMELOCK_SECONDS, RESUME_TIMELOCK_SECONDS,
+    };
+
+    #[test]
+    fn reschedule_just_before_activation_moves_the_window_atomically() {
+        let mut state = CircuitBreakerState::default();
+        CircuitBreaker::pause(&mut state, 100, 600, 1u8).unwrap();
+
+        let reschedule_at = 100 + PAUSE_TIMELOCK_SECONDS - 1;
+        CircuitBreaker::pause(&mut state, reschedule_at, 900, 2u8).unwrap();
+
+        assert_eq!(state.rescheduled_by, Some(2));
+        assert!(!CircuitBreaker::is_paused(
+            &state,
+            100 + PAUSE_TIMELOCK_SECONDS
+        ));
+        assert!(CircuitBreaker::is_paused(
+            &state,
+            reschedule_at + PAUSE_TIMELOCK_SECONDS
+        ));
+    }
+
+    #[test]
+    fn resume_cannot_race_a_pause_activation() {
+        let mut state = CircuitBreakerState::default();
+        CircuitBreaker::pause(&mut state, 0, 10_000, 1u8).unwrap();
+
+        let resume_requested_at = PAUSE_TIMELOCK_SECONDS - 1;
+        assert!(matches!(
+            CircuitBreaker::resume(&mut state, resume_requested_at, 9u8),
+            Ok(CircuitBreakerTransition::ResumeScheduled { .. })
+        ));
+        assert!(CircuitBreaker::is_paused(&state, PAUSE_TIMELOCK_SECONDS));
+        assert_eq!(
+            CircuitBreaker::resume(
+                &mut state,
+                resume_requested_at + RESUME_TIMELOCK_SECONDS - 1,
+                9u8,
+            ),
+            Err(CircuitBreakerError::ResumeTimelockActive)
+        );
+        assert!(CircuitBreaker::is_paused(
+            &state,
+            resume_requested_at + RESUME_TIMELOCK_SECONDS - 1
+        ));
+        assert!(matches!(
+            CircuitBreaker::resume(
+                &mut state,
+                resume_requested_at + RESUME_TIMELOCK_SECONDS,
+                9u8,
+            ),
+            Ok(CircuitBreakerTransition::ResumeActivated { .. })
+        ));
+    }
+
+    #[test]
+    fn emergency_pause_is_immediate_but_resume_is_not() {
+        let mut state = CircuitBreakerState::default();
+        CircuitBreaker::emergency_pause(&mut state, 50, 1u8);
+        assert!(CircuitBreaker::is_paused(&state, 50));
+
+        CircuitBreaker::resume(&mut state, 51, 9u8).unwrap();
+        assert!(CircuitBreaker::is_paused(
+            &state,
+            51 + RESUME_TIMELOCK_SECONDS - 1
+        ));
+        CircuitBreaker::resume(&mut state, 51 + RESUME_TIMELOCK_SECONDS, 9u8).unwrap();
+        assert!(!CircuitBreaker::is_paused(&state, u64::MAX));
+    }
+
+    #[test]
+    fn timed_pause_expires_without_an_admin_race() {
+        let mut state = CircuitBreakerState::default();
+        CircuitBreaker::pause(&mut state, 10, 30, 1u8).unwrap();
+        let expiry = 10 + PAUSE_TIMELOCK_SECONDS + 30;
+        assert!(matches!(
+            CircuitBreaker::sync(&mut state, expiry),
+            Some(CircuitBreakerTransition::ResumeActivated {
+                automatic: true,
+                ..
+            })
+        ));
+        assert!(!CircuitBreaker::is_paused(&state, expiry));
+    }
+}
+
 #[test]
 fn test_end_to_end_with_multiple_properties() {
     let env = Env::default();

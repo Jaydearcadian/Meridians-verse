@@ -83,6 +83,8 @@ pub enum GovernanceError {
     PolicyContractNotSet = 11,
     /// Slashing contract address not configured
     SlashingContractNotSet = 12,
+    /// Pause duration must be greater than zero
+    InvalidPauseDuration = 13,
 }
 
 /// Oracle contract errors (Soroban version)

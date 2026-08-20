@@ -93,6 +93,14 @@ run_unit_tests() {
     log_success "Unit tests completed"
 }
 
+# Run focused circuit-breaker state-machine and race-condition scenarios.
+run_circuit_breaker_scenarios() {
+    log_info "Running circuit-breaker scenarios..."
+    cd "$WORKSPACE_ROOT"
+    cargo test -p stellar-insured-lib circuit_breaker
+    log_success "Circuit-breaker scenarios completed"
+}
+
 # Run integration tests
 run_integration_tests() {
     log_info "Running integration tests..."
@@ -418,6 +426,7 @@ main() {
     # Run tests
     if [ "$UNIT_TESTS" = true ]; then
         run_unit_tests || failed=true
+        run_circuit_breaker_scenarios || failed=true
     fi
     
     if [ "$INTEGRATION_TESTS" = true ]; then

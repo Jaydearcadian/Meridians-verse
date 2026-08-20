@@ -7,6 +7,7 @@
             }
             let mut role_manager = RoleManager::default();
             role_manager.grant(admin, Role::Admin);
+            role_manager.grant(admin, Role::Governance);
             Self {
                 admin,
                 role_manager,
@@ -45,8 +46,7 @@
                 arbiter: None,                     // #134 – falls back to admin
                 used_evidence_nonces: Mapping::default(),
                 caller_nonces: Mapping::default(),
-                is_paused: false,
-                pending_pause_after: None,
+                circuit_breaker: InkCircuitBreaker::default(),
                 pending_admin: None,
                 pending_admin_after: None,
                 admin_timelock_delay: 86_400, // 24 hours
@@ -186,10 +186,7 @@
             let caller = self.env().caller();
             let amount = self.env().transferred_value();
             
-            // Check if contract is paused
-            if self.is_paused {
-                return Err(InsuranceError::ContractPaused);
-            }
+            self.ensure_not_paused()?;
             if amount == 0 {
                 return Err(InsuranceError::ZeroAmount);
             }
@@ -912,10 +909,7 @@
             let paid = self.env().transferred_value();
             let now = self.env().block_timestamp();
             
-            // Check if contract is paused
-            if self.is_paused {
-                return Err(InsuranceError::ContractPaused);
-            }
+            self.ensure_not_paused()?;
             if property_id == 0 || coverage_amount == 0 || duration_seconds == 0 {
                 return Err(InsuranceError::InvalidParameters);
             }
@@ -1152,10 +1146,7 @@
             let caller = self.env().caller();
             let now = self.env().block_timestamp();
             
-            // Check if contract is paused
-            if self.is_paused {
-                return Err(InsuranceError::ContractPaused);
-            }
+            self.ensure_not_paused()?;
 
             // #349 – per-caller monotonic nonce check (prevents replay / double-execution)
             let expected_nonce = self.caller_nonces.get(&caller).unwrap_or(0);
@@ -1338,10 +1329,7 @@
         ) -> Result<(), InsuranceError> {
             let caller = self.env().caller();
             
-            // Check if contract is paused
-            if self.is_paused {
-                return Err(InsuranceError::ContractPaused);
-            }
+            self.ensure_not_paused()?;
 
             if !self.role_manager.has_role(caller, Role::Assessor) {
                 return Err(InsuranceError::Unauthorized);
@@ -2322,83 +2310,53 @@
             self.caller_nonces.get(&caller).unwrap_or(0)
         }
         
-        /// Step 1 of 2: propose pausing the contract.
-        /// The pause will only take effect after `admin_timelock_delay` seconds
-        /// have elapsed and `execute_pause` is called (#301).
+        /// Schedule a timed pause through the Governance role.
         #[ink(message)]
-        pub fn propose_pause(&mut self) -> Result<(), InsuranceError> {
-            self.ensure_role(Role::Admin)?;
-            if self.is_paused {
-                return Err(InsuranceError::InvalidParameters);
-            }
-            if self.pending_pause_after.is_some() {
-                return Err(InsuranceError::TimeLockPending);
-            }
-            let earliest = self.env().block_timestamp()
-                .saturating_add(self.admin_timelock_delay);
-            self.pending_pause_after = Some(earliest);
-            self.env().emit_event(PauseProposed {
-                proposed_by: self.env().caller(),
-                earliest_execution: earliest,
-            });
+        pub fn pause(&mut self, duration_seconds: u64) -> Result<(), InsuranceError> {
+            self.ensure_governance()?;
+            let now = self.now_seconds();
+            let caller = self.env().caller();
+            let transition = self
+                .circuit_breaker
+                .pause(now, duration_seconds, caller)
+                .map_err(Self::map_circuit_breaker_error)?;
+            self.emit_circuit_breaker_transition(transition);
             Ok(())
         }
 
-        /// Step 2 of 2: execute a previously proposed pause after the time-lock
-        /// delay has elapsed (#301).
+        /// Immediately pause through the Governance role.
         #[ink(message)]
-        pub fn execute_pause(&mut self) -> Result<(), InsuranceError> {
-            self.ensure_role(Role::Admin)?;
-            let earliest = self.pending_pause_after
-                .ok_or(InsuranceError::InvalidParameters)?;
-            if self.env().block_timestamp() < earliest {
-                return Err(InsuranceError::TimeLockNotReady);
-            }
-            self.pending_pause_after = None;
-            self.is_paused = true;
-            self.env().emit_event(ContractPaused {
-                paused_by: self.env().caller(),
-                timestamp: self.env().block_timestamp(),
-            });
+        pub fn emergency_pause(&mut self) -> Result<(), InsuranceError> {
+            self.ensure_governance()?;
+            let now = self.now_seconds();
+            let caller = self.env().caller();
+            let transitions = self
+                .circuit_breaker
+                .emergency_pause(now, caller);
+            self.emit_circuit_breaker_transition(transitions.0);
+            self.emit_circuit_breaker_transition(transitions.1);
             Ok(())
         }
 
-        /// Convenience alias kept for backward-compatibility; immediately pauses
-        /// without a time-lock (retained for emergency use by admin).
-        /// For non-emergency use, prefer `propose_pause` + `execute_pause`.
+        /// Schedule or activate an Admin-gated resume.
         #[ink(message)]
-        pub fn pause(&mut self) -> Result<(), InsuranceError> {
+        pub fn resume(&mut self) -> Result<(), InsuranceError> {
             self.ensure_role(Role::Admin)?;
-            if self.is_paused {
-                return Err(InsuranceError::InvalidParameters);
-            }
-            self.is_paused = true;
-            self.env().emit_event(ContractPaused {
-                paused_by: self.env().caller(),
-                timestamp: self.env().block_timestamp(),
-            });
+            let now = self.now_seconds();
+            let caller = self.env().caller();
+            let transition = self
+                .circuit_breaker
+                .resume(now, caller)
+                .map_err(Self::map_circuit_breaker_error)?;
+            self.emit_circuit_breaker_transition(transition);
             Ok(())
         }
-        
-        /// Unpause contract operations (admin only)
+
         #[ink(message)]
-        pub fn unpause(&mut self) -> Result<(), InsuranceError> {
-            self.ensure_role(Role::Admin)?;
-            if !self.is_paused {
-                return Err(InsuranceError::InvalidParameters);
-            }
-            self.is_paused = false;
-            self.env().emit_event(ContractUnpaused {
-                unpaused_by: self.env().caller(),
-                timestamp: self.env().block_timestamp(),
-            });
-            Ok(())
-        }
-        
-        /// Check if contract is paused
-        #[ink(message)]
-        pub fn is_contract_paused(&self) -> bool {
-            self.is_paused
+        pub fn is_paused(&mut self) -> bool {
+            self.sync_circuit_breaker();
+            let now = self.now_seconds();
+            self.circuit_breaker.is_paused(now)
         }
 
         /// Step 1 of 2: propose transferring admin rights to `new_admin`.
@@ -2461,10 +2419,7 @@
             let caller = self.env().caller();
             let now = self.env().block_timestamp();
             
-            // Check if contract is paused
-            if self.is_paused {
-                return Err(InsuranceError::ContractPaused);
-            }
+            self.ensure_not_paused()?;
 
             let mut claim = self
                 .claims
@@ -2774,6 +2729,94 @@
                 return Err(InsuranceError::Unauthorized);
             }
             Ok(())
+        }
+
+        fn ensure_not_paused(&mut self) -> Result<(), InsuranceError> {
+            self.sync_circuit_breaker();
+            let now = self.now_seconds();
+            if self.circuit_breaker.is_paused(now) {
+                return Err(InsuranceError::ContractPaused);
+            }
+            Ok(())
+        }
+
+        fn ensure_governance(&self) -> Result<(), InsuranceError> {
+            if !self
+                .role_manager
+                .has_exact_role(self.env().caller(), Role::Governance)
+            {
+                return Err(InsuranceError::Unauthorized);
+            }
+            Ok(())
+        }
+
+        fn now_seconds(&self) -> u64 {
+            self.env().block_timestamp() / 1_000
+        }
+
+        fn sync_circuit_breaker(&mut self) {
+            let now = self.now_seconds();
+            if let Some(transition) = self.circuit_breaker.sync(now) {
+                self.emit_circuit_breaker_transition(transition);
+            }
+        }
+
+        fn map_circuit_breaker_error(error: CircuitBreakerError) -> InsuranceError {
+            match error {
+                CircuitBreakerError::ResumeTimelockActive => InsuranceError::TimeLockNotReady,
+                CircuitBreakerError::NotPaused
+                | CircuitBreakerError::InvalidDuration
+                | CircuitBreakerError::EmergencyPauseActive
+                | CircuitBreakerError::TimestampOverflow => InsuranceError::InvalidParameters,
+            }
+        }
+
+        fn emit_circuit_breaker_transition(
+            &self,
+            transition: CircuitBreakerTransition<AccountId>,
+        ) {
+            match transition {
+                CircuitBreakerTransition::PauseScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                    pause_until,
+                    rescheduled_by,
+                } => self.env().emit_event(PauseScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                    pause_until,
+                    rescheduled_by,
+                }),
+                CircuitBreakerTransition::PauseActivated {
+                    activated_at,
+                    pause_until,
+                    emergency,
+                } => self.env().emit_event(PauseActivated {
+                    activated_at,
+                    pause_until,
+                    emergency,
+                }),
+                CircuitBreakerTransition::ResumeScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                } => self.env().emit_event(ResumeScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                }),
+                CircuitBreakerTransition::ResumeActivated {
+                    activated_by,
+                    activated_at,
+                    automatic,
+                } => self.env().emit_event(ResumeActivated {
+                    activated_by,
+                    activated_at,
+                    automatic,
+                }),
+            }
         }
 
         /// Maps a property **confidence** (quality) score to the corresponding [`RiskLevel`].

@@ -5,6 +5,8 @@ mod types;
 mod validation;
 
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Bytes, Env, String, Vec};
+use stellar_insured_lib::access_control::{self, AccessControlRole};
+use stellar_insured_lib::circuit_breaker;
 
 use storage::{DataKey, MAX_HISTORY_ITEMS};
 use types::{
@@ -68,7 +70,6 @@ impl PropertyBridge {
             max_signatures_required: max_signatures,
             default_timeout_seconds: default_timeout,
             gas_limit_per_bridge: gas_limit,
-            emergency_pause: false,
             metadata_preservation: true,
             service_fee,
             fee_token,
@@ -80,6 +81,8 @@ impl PropertyBridge {
         env.storage().instance().set(&DataKey::Version, &CONTRACT_VERSION);
         env.storage().instance().set(&DataKey::ReqCounter, &0u64);
         env.storage().instance().set(&DataKey::TxCounter, &0u64);
+        access_control::init_access_control(&env, &admin);
+        circuit_breaker::init(&env);
 
         let mut operators = Vec::new(&env);
         operators.push_back(admin.clone());
@@ -349,20 +352,20 @@ impl PropertyBridge {
         );
     }
 
-    pub fn set_pause(env: Env, admin: Address, paused: bool) {
-        admin.require_auth();
-        require_non_zero_address(&admin);
-        require_admin(&env, &admin);
+    pub fn pause(env: Env, governance: Address, duration_seconds: u64) {
+        circuit_breaker::pause(&env, &governance, duration_seconds);
+    }
 
-        let mut config: BridgeConfig = env.storage().instance().get(&DataKey::Config)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
-        config.emergency_pause = paused;
-        env.storage().instance().set(&DataKey::Config, &config);
-        
-        env.events().publish(
-            (symbol_short!("bridge"), symbol_short!("pause")),
-            paused,
-        );
+    pub fn resume(env: Env, admin: Address) {
+        circuit_breaker::resume(&env, &admin);
+    }
+
+    pub fn emergency_pause(env: Env, governance: Address) {
+        circuit_breaker::emergency_pause(&env, &governance);
+    }
+
+    pub fn set_role(env: Env, addr: Address, role: AccessControlRole) {
+        access_control::set_role(&env, &env.current_contract_address(), &addr, role);
     }
 
     pub fn add_operator(env: Env, admin: Address, operator: Address) {
@@ -467,6 +470,10 @@ impl PropertyBridge {
             .get(&DataKey::Operators)
             .unwrap_or(Vec::new(&env));
         operators.contains(address)
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        circuit_breaker::is_paused(&env)
     }
 
     pub fn get_nonce(env: Env, address: Address) -> u64 {

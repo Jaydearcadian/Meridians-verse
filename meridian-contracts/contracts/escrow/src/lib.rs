@@ -11,6 +11,7 @@ use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
 use stellar_insured_lib::events::emit_event_with;
 use stellar_insured_lib::{EscrowError, ValidationError};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
+use stellar_insured_lib::circuit_breaker;
 
 use storage::{DataKey, StorageVersion};
 use types::{ApprovalType, EscrowData, EscrowStatus, MultiSigConfig};
@@ -37,22 +38,27 @@ impl AdvancedEscrow {
             .instance()
             .set(&DataKey::Version, &StorageVersion::current());
         env.storage().instance().set(&DataKey::EscrowCount, &0u64);
-        env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::FeeBps, &0u32);
 
         access_control::init_access_control(&env, &admin);
+        circuit_breaker::init(&env);
 
         emit_event_with(&env, symbol_short!("ESCROW"), symbol_short!("INIT"), &admin);
         Ok(())
     }
 
-    pub fn set_pause(env: Env, admin: Address, paused: bool) -> Result<(), EscrowError> {
-        admin.require_auth();
-        require_non_zero_address(&admin).map_err(|_| EscrowError::Unauthorized)?;
-        access_control::require_role(&env, &admin, &AccessControlRole::Admin);
-        env.storage().instance().set(&DataKey::Paused, &paused);
+    pub fn pause(env: Env, governance: Address, duration_seconds: u64) -> Result<(), EscrowError> {
+        circuit_breaker::pause(&env, &governance, duration_seconds);
+        Ok(())
+    }
 
-        emit_event_with(&env, symbol_short!("ESCROW"), symbol_short!("PAUSE"), &paused);
+    pub fn resume(env: Env, admin: Address) -> Result<(), EscrowError> {
+        circuit_breaker::resume(&env, &admin);
+        Ok(())
+    }
+
+    pub fn emergency_pause(env: Env, governance: Address) -> Result<(), EscrowError> {
+        circuit_breaker::emergency_pause(&env, &governance);
         Ok(())
     }
 
@@ -341,10 +347,7 @@ impl AdvancedEscrow {
     }
 
     pub fn is_paused(env: Env) -> bool {
-        env.storage()
-            .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false)
+        circuit_breaker::is_paused(&env)
     }
 
     pub fn get_escrow(env: Env, escrow_id: u64) -> Option<EscrowData> {

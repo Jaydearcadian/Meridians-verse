@@ -12,6 +12,9 @@
 use ink::prelude::*;
 use ink::storage::Mapping;
 use propchain_traits::*;
+use stellar_insured_lib::circuit_breaker::{
+    CircuitBreakerTransition, InkCircuitBreaker,
+};
 
 /// Property Valuation Oracle Contract
 #[ink::contract]
@@ -28,6 +31,12 @@ mod propchain_oracle {
     pub struct PropertyValuationOracle {
         /// Admin account
         admin: AccountId,
+
+        /// Governance multisig allowed to schedule valuation freezes
+        governance: AccountId,
+
+        /// Shared pause protocol state
+        circuit_breaker: InkCircuitBreaker,
 
         /// Property valuations storage
         pub property_valuations: Mapping<u64, PropertyValuation>,
@@ -237,12 +246,47 @@ mod propchain_oracle {
         aggregated_price: u128,
     }
 
+    #[ink(event)]
+    pub struct PauseScheduled {
+        #[ink(topic)]
+        scheduled_by: AccountId,
+        scheduled_at: u64,
+        activates_at: u64,
+        pause_until: Option<u64>,
+        rescheduled_by: Option<AccountId>,
+    }
+
+    #[ink(event)]
+    pub struct PauseActivated {
+        activated_at: u64,
+        pause_until: Option<u64>,
+        emergency: bool,
+    }
+
+    #[ink(event)]
+    pub struct ResumeScheduled {
+        #[ink(topic)]
+        scheduled_by: AccountId,
+        scheduled_at: u64,
+        activates_at: u64,
+    }
+
+    #[ink(event)]
+    pub struct ResumeActivated {
+        #[ink(topic)]
+        activated_by: Option<AccountId>,
+        activated_at: u64,
+        automatic: bool,
+    }
+
     impl PropertyValuationOracle {
         /// Constructor for the Property Valuation Oracle
         #[ink(constructor)]
         pub fn new(admin: AccountId) -> Self {
             Self {
                 admin,
+                governance: admin,
+                circuit_breaker: InkCircuitBreaker::default(),
                 property_valuations: Mapping::default(),
                 historical_valuations: Mapping::default(),
                 oracle_sources: Mapping::default(),
@@ -356,6 +400,7 @@ mod propchain_oracle {
             property_id: u64,
             valuation: PropertyValuation,
         ) -> Result<(), OracleError> {
+            self.ensure_not_paused()?;
             // Validate valuation
             if valuation.valuation == 0 {
                 return Err(OracleError::InvalidValuation);
@@ -447,6 +492,7 @@ mod propchain_oracle {
         /// Request a new valuation for a property
         #[ink(message)]
         pub fn request_property_valuation(&mut self, property_id: u64) -> Result<u64, OracleError> {
+            self.ensure_not_paused()?;
             // Check if request already pending
             if let Some(timestamp) = self.pending_requests.get(&property_id) {
                 let current_time = self.env().block_timestamp();
@@ -857,6 +903,60 @@ mod propchain_oracle {
                 .collect()
         }
 
+        /// Schedule a timed valuation freeze through governance.
+        #[ink(message)]
+        pub fn pause(&mut self, duration_seconds: u64) -> Result<(), OracleError> {
+            self.ensure_governance()?;
+            let now = self.now_seconds();
+            let caller = self.env().caller();
+            let transition = self
+                .circuit_breaker
+                .pause(now, duration_seconds, caller)
+                .map_err(|_| OracleError::InvalidParameters)?;
+            self.emit_circuit_breaker_transition(transition);
+            Ok(())
+        }
+
+        /// Immediately freeze valuations through governance.
+        #[ink(message)]
+        pub fn emergency_pause(&mut self) -> Result<(), OracleError> {
+            self.ensure_governance()?;
+            let now = self.now_seconds();
+            let caller = self.env().caller();
+            let transitions = self.circuit_breaker.emergency_pause(now, caller);
+            self.emit_circuit_breaker_transition(transitions.0);
+            self.emit_circuit_breaker_transition(transitions.1);
+            Ok(())
+        }
+
+        /// Schedule or activate an admin resume.
+        #[ink(message)]
+        pub fn resume(&mut self) -> Result<(), OracleError> {
+            self.ensure_admin()?;
+            let now = self.now_seconds();
+            let caller = self.env().caller();
+            let transition = self
+                .circuit_breaker
+                .resume(now, caller)
+                .map_err(|_| OracleError::InvalidParameters)?;
+            self.emit_circuit_breaker_transition(transition);
+            Ok(())
+        }
+
+        #[ink(message)]
+        pub fn is_paused(&mut self) -> bool {
+            self.sync_circuit_breaker();
+            let now = self.now_seconds();
+            self.circuit_breaker.is_paused(now)
+        }
+
+        #[ink(message)]
+        pub fn set_governance(&mut self, governance: AccountId) -> Result<(), OracleError> {
+            self.ensure_admin()?;
+            self.governance = governance;
+            Ok(())
+        }
+
         // Helper methods
 
         /// Require the caller to be the oracle admin before privileged changes.
@@ -865,6 +965,81 @@ mod propchain_oracle {
                 return Err(OracleError::Unauthorized);
             }
             Ok(())
+        }
+
+        fn ensure_governance(&self) -> Result<(), OracleError> {
+            if self.env().caller() != self.governance {
+                return Err(OracleError::Unauthorized);
+            }
+            Ok(())
+        }
+
+        fn ensure_not_paused(&mut self) -> Result<(), OracleError> {
+            self.sync_circuit_breaker();
+            let now = self.now_seconds();
+            if self.circuit_breaker.is_paused(now) {
+                return Err(OracleError::ContractPaused);
+            }
+            Ok(())
+        }
+
+        fn now_seconds(&self) -> u64 {
+            self.env().block_timestamp() / 1_000
+        }
+
+        fn sync_circuit_breaker(&mut self) {
+            let now = self.now_seconds();
+            if let Some(transition) = self.circuit_breaker.sync(now) {
+                self.emit_circuit_breaker_transition(transition);
+            }
+        }
+
+        fn emit_circuit_breaker_transition(
+            &self,
+            transition: CircuitBreakerTransition<AccountId>,
+        ) {
+            match transition {
+                CircuitBreakerTransition::PauseScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                    pause_until,
+                    rescheduled_by,
+                } => self.env().emit_event(PauseScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                    pause_until,
+                    rescheduled_by,
+                }),
+                CircuitBreakerTransition::PauseActivated {
+                    activated_at,
+                    pause_until,
+                    emergency,
+                } => self.env().emit_event(PauseActivated {
+                    activated_at,
+                    pause_until,
+                    emergency,
+                }),
+                CircuitBreakerTransition::ResumeScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                } => self.env().emit_event(ResumeScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                }),
+                CircuitBreakerTransition::ResumeActivated {
+                    activated_by,
+                    activated_at,
+                    automatic,
+                } => self.env().emit_event(ResumeActivated {
+                    activated_by,
+                    activated_at,
+                    automatic,
+                }),
+            }
         }
 
         /// Collect fresh price data from each active oracle source for a property.
@@ -2413,7 +2588,11 @@ mod oracle_tests {
         #[ink(message)]
         fn pause_for_migration(&mut self) -> Result<(), OracleError> {
             self.ensure_admin()?;
-            // In a real implementation, we would add a 'paused' flag to the storage
+            let now = self.now_seconds();
+            let caller = self.env().caller();
+            let transitions = self.circuit_breaker.emergency_pause(now, caller);
+            self.emit_circuit_breaker_transition(transitions.0);
+            self.emit_circuit_breaker_transition(transitions.1);
             Ok(())
         }
 
@@ -2421,6 +2600,13 @@ mod oracle_tests {
         #[ink(message)]
         fn resume_after_migration(&mut self) -> Result<(), OracleError> {
             self.ensure_admin()?;
+            let now = self.now_seconds();
+            let caller = self.env().caller();
+            let transition = self
+                .circuit_breaker
+                .resume(now, caller)
+                .map_err(|_| OracleError::InvalidParameters)?;
+            self.emit_circuit_breaker_transition(transition);
             Ok(())
         }
 
@@ -2445,4 +2631,3 @@ mod oracle_tests {
         }
     }
 }
-

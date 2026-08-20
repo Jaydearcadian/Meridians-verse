@@ -8,7 +8,10 @@ license = "MIT"
 publish = false
 
 [dependencies]
-soroban-sdk = { workspace = true }
+soroban-sdk = { workspace = true, optional = true }
+ink = { workspace = true, optional = true }
+scale = { workspace = true, optional = true }
+scale-info = { workspace = true, optional = true }
 
 [dependencies.kani]
 version = "0.60"
@@ -21,9 +24,16 @@ workspace = true
 optional = true
 
 [features]
-default = ["std"]
-std = ["soroban-sdk/std"]
-verification = ["std", "kani", "prusti-contracts"]
+default = ["std", "soroban"]
+std = [
+    "soroban-sdk?/std",
+    "ink?/std",
+    "scale?/std",
+    "scale-info?/std",
+]
+soroban = ["dep:soroban-sdk"]
+ink = ["dep:ink", "dep:scale", "dep:scale-info"]
+verification = ["std", "soroban", "kani", "prusti-contracts"]
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

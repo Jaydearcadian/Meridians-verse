@@ -252,24 +252,36 @@ pub struct EvidenceVerified {
 }
 
 #[ink(event)]
-pub struct ContractPaused {
+pub struct PauseScheduled {
     #[ink(topic)]
-    pub paused_by: AccountId,
-    pub timestamp: u64,
+    pub scheduled_by: AccountId,
+    pub scheduled_at: u64,
+    pub activates_at: u64,
+    pub pause_until: Option<u64>,
+    pub rescheduled_by: Option<AccountId>,
 }
 
 #[ink(event)]
-pub struct ContractUnpaused {
-    #[ink(topic)]
-    pub unpaused_by: AccountId,
-    pub timestamp: u64,
+pub struct PauseActivated {
+    pub activated_at: u64,
+    pub pause_until: Option<u64>,
+    pub emergency: bool,
 }
 
 #[ink(event)]
-pub struct PauseProposed {
+pub struct ResumeScheduled {
     #[ink(topic)]
-    pub proposed_by: AccountId,
-    pub earliest_execution: u64,
+    pub scheduled_by: AccountId,
+    pub scheduled_at: u64,
+    pub activates_at: u64,
+}
+
+#[ink(event)]
+pub struct ResumeActivated {
+    #[ink(topic)]
+    pub activated_by: Option<AccountId>,
+    pub activated_at: u64,
+    pub automatic: bool,
 }
 
 #[ink(event)]

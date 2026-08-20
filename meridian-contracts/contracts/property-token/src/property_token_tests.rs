@@ -835,7 +835,7 @@
                 pending.executable_at,
                 1_000 + contract.code_hash_upgrade_delay()
             );
-            assert!(contract.get_bridge_config().emergency_pause);
+            assert!(contract.is_paused());
             assert_eq!(
                 contract.commit_code_hash(),
                 Err(Error::UpgradeTimelockActive)
@@ -909,7 +909,11 @@
 
             test::set_caller::<DefaultEnvironment>(accounts.alice);
             assert_eq!(
+                contract.approve(accounts.charlie, token_id),
+                Err(Error::ContractPaused)
+            );
+            assert_eq!(
                 contract.transfer_from(accounts.alice, accounts.charlie, token_id),
-                Err(Error::BridgePaused)
+                Err(Error::ContractPaused)
             );
         }

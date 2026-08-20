@@ -23,6 +23,7 @@ pub enum OracleError {
     RequestPending,
     NotEnoughConfirmations,
     MigrationRequired,
+    ContractPaused,
 }
 
 /// Trait definitions for PropChain contracts
@@ -649,7 +650,6 @@ pub struct BridgeConfig {
     pub max_signatures_required: u8,
     pub default_timeout_blocks: u64,
     pub gas_limit_per_bridge: u64,
-    pub emergency_pause: bool,
     pub metadata_preservation: bool,
 }
 

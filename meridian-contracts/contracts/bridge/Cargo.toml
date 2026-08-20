@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 soroban-sdk = { workspace = true }
+stellar-insured-lib = { path = "../lib" }
 
 [dependencies.kani]
 version = "0.60"

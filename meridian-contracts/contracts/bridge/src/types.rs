@@ -29,7 +29,6 @@ pub struct BridgeConfig {
     pub max_signatures_required: u32,
     pub default_timeout_seconds: u64,
     pub gas_limit_per_bridge: u64,
-    pub emergency_pause: bool,
     pub metadata_preservation: bool,
     pub service_fee: i128,
     pub fee_token: Address,

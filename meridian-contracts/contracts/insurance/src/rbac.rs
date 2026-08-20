@@ -32,6 +32,8 @@ pub enum Role {
     Underwriter,
     /// Regular policyholder – can submit claims and manage own policies.
     Policyholder,
+    /// Governance multisig allowed to schedule and activate emergency pauses.
+    Governance,
 }
 
 /// Compact on-chain role store.
@@ -70,10 +72,16 @@ impl RoleManager {
         self.roles.get(&(account, role as u8)).unwrap_or(false)
     }
 
+    /// Return true only when the account was explicitly granted `role`.
+    pub fn has_exact_role(&self, account: ink::primitives::AccountId, role: Role) -> bool {
+        self.roles.get(&(account, role as u8)).unwrap_or(false)
+    }
+
     /// Return all roles currently held by `account`.
     pub fn roles_of(&self, account: ink::primitives::AccountId) -> Vec<Role> {
         let all = [
             Role::Admin,
+            Role::Governance,
             Role::Assessor,
             Role::Oracle,
             Role::Underwriter,

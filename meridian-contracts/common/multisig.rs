@@ -1,4 +1,4 @@
-use soroban_sdk::{Env, Address, BytesN, Vec};
+use soroban_sdk::{Address, Env, Vec};
 
 /// Configuration for multisig admin control
 pub struct AdminConfig {
@@ -6,32 +6,38 @@ pub struct AdminConfig {
     pub threshold: u32, // e.g. 2 for 2-of-3, 3 for 3-of-5
 }
 
-/// Verify multisig signatures for a given action
+/// Require a unique threshold of configured Soroban signers for an action.
 pub fn verify_multisig(
     env: &Env,
-    action_hash: BytesN<32>,
-    signatures: Vec<(Address, BytesN<64>)>,
+    signers: Vec<Address>,
     config: &AdminConfig,
 ) -> bool {
     const MAX_SIGNATURES: u32 = 20;
 
-    // Prevent unbounded input processing
-    if signatures.len() > MAX_SIGNATURES {
-        panic!("Too many signatures");
+    // Prevent unbounded input processing and invalid threshold configurations.
+    if signers.len() > MAX_SIGNATURES
+        || config.threshold == 0
+        || config.threshold > config.admins.len()
+    {
+        return false;
     }
 
     let mut valid_count: u32 = 0;
+    let mut seen: Vec<Address> = Vec::new(env);
 
-    for (signer, sig) in signatures {
+    for signer in signers {
         // Early exit when threshold is reached
         if valid_count >= config.threshold {
             break;
         }
 
-        if config.admins.contains(&signer) {
-            if env.crypto().verify(&signer, &action_hash, &sig) {
-                valid_count += 1;
-            }
+        if config.admins.contains(signer.clone()) && !seen.contains(signer.clone()) {
+            // Soroban authorization is the canonical signature check for both
+            // account and contract addresses. The action is already bound to
+            // the invoking contract call and its arguments.
+            signer.require_auth();
+            seen.push_back(signer);
+            valid_count += 1;
         }
     }
 
