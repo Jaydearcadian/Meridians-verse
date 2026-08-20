@@ -2063,8 +2063,8 @@
         
         // Pause contract
         test::set_caller::<DefaultEnvironment>(accounts.alice);
-        assert!(contract.pause().is_ok());
-        assert!(contract.is_contract_paused());
+        assert!(contract.emergency_pause().is_ok());
+        assert!(contract.is_paused());
         
         // Try to submit claim - should fail
         test::set_caller::<DefaultEnvironment>(accounts.bob);
@@ -2089,7 +2089,7 @@
         
         // Pause contract
         test::set_caller::<DefaultEnvironment>(accounts.alice);
-        assert!(contract.pause().is_ok());
+        assert!(contract.emergency_pause().is_ok());
         
         // Try to create policy - should fail
         let calc = contract
@@ -2116,11 +2116,13 @@
         
         // Pause
         test::set_caller::<DefaultEnvironment>(accounts.alice);
-        contract.pause().unwrap();
+        contract.emergency_pause().unwrap();
         
-        // Unpause
-        contract.unpause().unwrap();
-        assert!(!contract.is_contract_paused());
+        // Resume requires scheduling and a one-hour delay.
+        contract.resume().unwrap();
+        test::set_block_timestamp::<DefaultEnvironment>(6_600_000);
+        contract.resume().unwrap();
+        assert!(!contract.is_paused());
         
         // Should be able to submit claim now
         test::set_caller::<DefaultEnvironment>(accounts.bob);
@@ -2142,7 +2144,7 @@
         
         // Pause
         test::set_caller::<DefaultEnvironment>(accounts.alice);
-        contract.pause().unwrap();
+        contract.emergency_pause().unwrap();
         
         // Try to provide liquidity - should fail
         test::set_caller::<DefaultEnvironment>(accounts.bob);
@@ -2163,7 +2165,7 @@
         
         // Pause
         test::set_caller::<DefaultEnvironment>(accounts.alice);
-        contract.pause().unwrap();
+        contract.emergency_pause().unwrap();
         
         // Try to process claim - should fail
         let result = contract.process_claim(

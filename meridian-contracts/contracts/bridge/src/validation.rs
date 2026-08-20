@@ -9,14 +9,7 @@ use crate::types::BridgeConfig;
 /// contract's `require_not_paused` signature so all validation helpers
 /// follow the same `&Env` convention (#353).
 pub fn require_not_paused(env: &Env) {
-    let config: BridgeConfig = env
-        .storage()
-        .instance()
-        .get(&DataKey::Config)
-        .unwrap_or_else(|| panic!("Contract not initialized"));
-    if config.emergency_pause {
-        panic!("Bridge paused");
-    }
+    stellar_insured_lib::circuit_breaker::require_not_paused(env);
 }
 
 /// Panics if `destination_chain` is not in the supported chains list.

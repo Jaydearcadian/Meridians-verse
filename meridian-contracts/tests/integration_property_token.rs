@@ -475,19 +475,18 @@ mod integration_tests {
         
         // Get initial configuration
         let initial_config = token_contract.get_bridge_config();
-        assert!(!initial_config.emergency_pause);
         assert_eq!(initial_config.min_signatures_required, 2);
         
         // Test emergency pause
-        test::set_caller::<DefaultEnvironment>(token_contract.admin());
-        token_contract.set_emergency_pause(true).unwrap();
-        
-        let paused_config = token_contract.get_bridge_config();
-        assert!(paused_config.emergency_pause);
+        let admin = token_contract.admin();
+        token_contract.set_governance(admin).unwrap();
+        test::set_caller::<DefaultEnvironment>(admin);
+        token_contract.emergency_pause().unwrap();
+        assert!(token_contract.is_paused());
         
         // Test unauthorized configuration change
         test::set_caller::<DefaultEnvironment>(accounts.bob);
-        let unauthorized_result = token_contract.set_emergency_pause(false);
+        let unauthorized_result = token_contract.emergency_pause();
         assert_eq!(unauthorized_result, Err(crate::property_token::Error::Unauthorized));
         
         // Update configuration
@@ -498,7 +497,6 @@ mod integration_tests {
             max_signatures_required: 7,
             default_timeout_blocks: 200,
             gas_limit_per_bridge: 1000000,
-            emergency_pause: false,
             metadata_preservation: true,
         };
         
@@ -703,8 +701,10 @@ mod integration_tests {
         assert_eq!(insufficient_sigs_result, Err(crate::property_token::Error::InsufficientSignatures));
         
         // Test emergency pause
-        test::set_caller::<DefaultEnvironment>(token_contract.admin());
-        token_contract.set_emergency_pause(true).unwrap();
+        let admin = token_contract.admin();
+        token_contract.set_governance(admin).unwrap();
+        test::set_caller::<DefaultEnvironment>(admin);
+        token_contract.emergency_pause().unwrap();
         
         test::set_caller::<DefaultEnvironment>(accounts.alice);
         let paused_result = token_contract.initiate_bridge_multisig(
@@ -714,7 +714,7 @@ mod integration_tests {
             2,
             Some(100),
         );
-        assert_eq!(paused_result, Err(crate::property_token::Error::BridgePaused));
+        assert_eq!(paused_result, Err(crate::property_token::Error::ContractPaused));
     }
 
     #[ink::test]

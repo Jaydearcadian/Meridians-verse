@@ -9,6 +9,9 @@
 //! Property insurance contract module wiring, types, and delegated implementations.
 
 use ink::storage::Mapping;
+use stellar_insured_lib::circuit_breaker::{
+    CircuitBreakerError, CircuitBreakerTransition, InkCircuitBreaker,
+};
 
 mod rbac;
 pub use rbac::{Role, RoleManager};
@@ -124,10 +127,9 @@ mod propchain_insurance {
         // Callers must supply their current nonce; it is incremented on each accepted submit_claim.
         caller_nonces: Mapping<AccountId, u64>,
         
-        // Emergency pause mechanism
-        is_paused: bool,
-        // Time-lock for admin operations
-        pending_pause_after: Option<u64>,
+        // Shared circuit breaker state
+        circuit_breaker: InkCircuitBreaker,
+        // Time-lock for admin transfers
         pending_admin: Option<AccountId>,
         pending_admin_after: Option<u64>,
         admin_timelock_delay: u64,

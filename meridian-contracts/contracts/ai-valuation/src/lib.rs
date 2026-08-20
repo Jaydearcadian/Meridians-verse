@@ -12,6 +12,9 @@ use ink::prelude::string::String;
 use ink::storage::Mapping;
 use ink::env::Environment;
 use propchain_traits::*;
+use stellar_insured_lib::circuit_breaker::{
+    CircuitBreakerTransition, InkCircuitBreaker,
+};
 use ml_pipeline::*;
 use scale::Encode;
 
@@ -134,6 +137,8 @@ mod ai_valuation {
     pub struct AIValuationEngine {
         /// Contract administrator
         admin: AccountId,
+        /// Governance multisig allowed to schedule pause windows
+        governance: AccountId,
         /// Registered AI models
         models: Mapping<String, AIModel>,
         /// Model performance tracking
@@ -164,8 +169,8 @@ mod ai_valuation {
         feature_cache_ttl: u64,
         /// Bias detection threshold
         bias_threshold: u32,
-        /// Contract pause state
-        paused: bool,
+        /// Shared pause protocol state
+        circuit_breaker: InkCircuitBreaker,
         /// Hash commitment of the registered model weights (per model id)
         model_commitments: Mapping<String, [u8; 32]>,
         /// Groth16 verification keys for model-execution proofs (per model id)
@@ -222,6 +227,39 @@ mod ai_valuation {
         data_points_count: u64,
     }
 
+    #[ink(event)]
+    pub struct PauseScheduled {
+        #[ink(topic)]
+        scheduled_by: AccountId,
+        scheduled_at: u64,
+        activates_at: u64,
+        pause_until: Option<u64>,
+        rescheduled_by: Option<AccountId>,
+    }
+
+    #[ink(event)]
+    pub struct PauseActivated {
+        activated_at: u64,
+        pause_until: Option<u64>,
+        emergency: bool,
+    }
+
+    #[ink(event)]
+    pub struct ResumeScheduled {
+        #[ink(topic)]
+        scheduled_by: AccountId,
+        scheduled_at: u64,
+        activates_at: u64,
+    }
+
+    #[ink(event)]
+    pub struct ResumeActivated {
+        #[ink(topic)]
+        activated_by: Option<AccountId>,
+        activated_at: u64,
+        automatic: bool,
+    }
+
     /// AI Valuation Engine errors
     #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
@@ -266,6 +304,7 @@ mod ai_valuation {
         pub fn new(admin: AccountId) -> Self {
             Self {
                 admin,
+                governance: admin,
                 models: Mapping::default(),
                 performance: Mapping::default(),
                 property_features: Mapping::default(),
@@ -281,7 +320,7 @@ mod ai_valuation {
                 min_confidence: 7000,  // 70% minimum confidence
                 feature_cache_ttl: 3600, // 1 hour
                 bias_threshold: 2000,  // 20% bias threshold
-                paused: false,
+                circuit_breaker: InkCircuitBreaker::default(),
                 model_commitments: Mapping::default(),
                 model_vks: Mapping::default(),
             }
@@ -549,19 +588,59 @@ mod ai_valuation {
             
             Ok(explanation)
         }
-        /// Pause the contract
+        /// Schedule a timed pause. Governance should be a multisig account.
         #[ink(message)]
-        pub fn pause(&mut self) -> Result<(), AIValuationError> {
-            self.ensure_admin()?;
-            self.paused = true;
+        pub fn pause(&mut self, duration_seconds: u64) -> Result<(), AIValuationError> {
+            self.ensure_governance()?;
+            let caller = self.env().caller();
+            let now = self.now_seconds();
+            let transition = self
+                .circuit_breaker
+                .pause(now, duration_seconds, caller)
+                .map_err(|_| AIValuationError::InvalidParameters)?;
+            self.emit_circuit_breaker_transition(transition);
             Ok(())
         }
 
-        /// Resume the contract
+        /// Schedule or activate a resume after the resume timelock.
         #[ink(message)]
         pub fn resume(&mut self) -> Result<(), AIValuationError> {
             self.ensure_admin()?;
-            self.paused = false;
+            let caller = self.env().caller();
+            let now = self.now_seconds();
+            let transition = self
+                .circuit_breaker
+                .resume(now, caller)
+                .map_err(|_| AIValuationError::InvalidParameters)?;
+            self.emit_circuit_breaker_transition(transition);
+            Ok(())
+        }
+
+        /// Immediately freeze valuations through the governance multisig.
+        #[ink(message)]
+        pub fn emergency_pause(&mut self) -> Result<(), AIValuationError> {
+            self.ensure_governance()?;
+            let caller = self.env().caller();
+            let now = self.now_seconds();
+            let transitions = self
+                .circuit_breaker
+                .emergency_pause(now, caller);
+            self.emit_circuit_breaker_transition(transitions.0);
+            self.emit_circuit_breaker_transition(transitions.1);
+            Ok(())
+        }
+
+        #[ink(message)]
+        pub fn is_paused(&mut self) -> bool {
+            self.sync_circuit_breaker();
+            let now = self.now_seconds();
+            self.circuit_breaker.is_paused(now)
+        }
+
+        #[ink(message)]
+        pub fn set_governance(&mut self, governance: AccountId) -> Result<(), AIValuationError> {
+            self.ensure_admin()?;
+            self.governance = governance;
             Ok(())
         }
 
@@ -899,12 +978,80 @@ mod ai_valuation {
             Ok(())
         }
 
+        fn ensure_governance(&self) -> Result<(), AIValuationError> {
+            if self.env().caller() != self.governance {
+                return Err(AIValuationError::Unauthorized);
+            }
+            Ok(())
+        }
+
         /// Block state-changing operations while the valuation engine is paused.
-        fn ensure_not_paused(&self) -> Result<(), AIValuationError> {
-            if self.paused {
+        fn ensure_not_paused(&mut self) -> Result<(), AIValuationError> {
+            self.sync_circuit_breaker();
+            let now = self.now_seconds();
+            if self.circuit_breaker.is_paused(now) {
                 return Err(AIValuationError::ContractPaused);
             }
             Ok(())
+        }
+
+        fn now_seconds(&self) -> u64 {
+            self.env().block_timestamp() / 1_000
+        }
+
+        fn sync_circuit_breaker(&mut self) {
+            let now = self.now_seconds();
+            if let Some(transition) = self.circuit_breaker.sync(now) {
+                self.emit_circuit_breaker_transition(transition);
+            }
+        }
+
+        fn emit_circuit_breaker_transition(
+            &self,
+            transition: CircuitBreakerTransition<AccountId>,
+        ) {
+            match transition {
+                CircuitBreakerTransition::PauseScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                    pause_until,
+                    rescheduled_by,
+                } => self.env().emit_event(PauseScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                    pause_until,
+                    rescheduled_by,
+                }),
+                CircuitBreakerTransition::PauseActivated {
+                    activated_at,
+                    pause_until,
+                    emergency,
+                } => self.env().emit_event(PauseActivated {
+                    activated_at,
+                    pause_until,
+                    emergency,
+                }),
+                CircuitBreakerTransition::ResumeScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                } => self.env().emit_event(ResumeScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                }),
+                CircuitBreakerTransition::ResumeActivated {
+                    activated_by,
+                    activated_at,
+                    automatic,
+                } => self.env().emit_event(ResumeActivated {
+                    activated_by,
+                    activated_at,
+                    automatic,
+                }),
+            }
         }
 
         /// Hash a statement into the single 32-byte public input expected by

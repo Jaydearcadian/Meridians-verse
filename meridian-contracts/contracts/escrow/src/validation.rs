@@ -1,20 +1,13 @@
 use soroban_sdk::{Address, Env};
 use stellar_insured_lib::ValidationError;
 
-use crate::storage::DataKey;
-
 /// Checks if the contract is paused and returns an error if so.
 ///
 /// Always pass `&Env` (by reference) to avoid unnecessary clones — `Env` is
 /// cheap to clone but passing by reference is the idiomatic pattern for
 /// helper/validation functions that do not need ownership (#353).
 pub fn require_not_paused(env: &Env) -> Result<(), ValidationError> {
-    let paused: bool = env
-        .storage()
-        .instance()
-        .get(&DataKey::Paused)
-        .unwrap_or(false);
-    if paused {
+    if stellar_insured_lib::circuit_breaker::is_paused(env) {
         return Err(ValidationError::ContractPaused);
     }
     Ok(())

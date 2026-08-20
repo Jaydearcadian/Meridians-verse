@@ -15,6 +15,9 @@ use ink::prelude::{
 use ink::prelude::string::String;
 use ink::storage::Mapping;
 use propchain_traits::*;
+use stellar_insured_lib::circuit_breaker::{
+    CircuitBreakerTransition, InkCircuitBreaker,
+};
 
 #[ink::contract]
 mod property_token {
@@ -62,6 +65,7 @@ mod property_token {
         GovernanceNotSet,
         UpgradeNotProposed,
         UpgradeTimelockActive,
+        ContractPaused,
     }
 
     /// Property Token contract that maintains compatibility with ERC-721 and ERC-1155
@@ -102,6 +106,7 @@ mod property_token {
         total_supply: u64,
         token_counter: u64,
         admin: AccountId,
+        circuit_breaker: InkCircuitBreaker,
 
         // Error logging and monitoring
         error_counts: Mapping<(AccountId, String), u64>,
@@ -368,6 +373,39 @@ mod property_token {
         pub price_per_share: u128,
     }
 
+    #[ink(event)]
+    pub struct PauseScheduled {
+        #[ink(topic)]
+        pub scheduled_by: AccountId,
+        pub scheduled_at: u64,
+        pub activates_at: u64,
+        pub pause_until: Option<u64>,
+        pub rescheduled_by: Option<AccountId>,
+    }
+
+    #[ink(event)]
+    pub struct PauseActivated {
+        pub activated_at: u64,
+        pub pause_until: Option<u64>,
+        pub emergency: bool,
+    }
+
+    #[ink(event)]
+    pub struct ResumeScheduled {
+        #[ink(topic)]
+        pub scheduled_by: AccountId,
+        pub scheduled_at: u64,
+        pub activates_at: u64,
+    }
+
+    #[ink(event)]
+    pub struct ResumeActivated {
+        #[ink(topic)]
+        pub activated_by: Option<AccountId>,
+        pub activated_at: u64,
+        pub automatic: bool,
+    }
+
 
     impl PropertyToken {
         /// Creates a new PropertyToken contract
@@ -382,7 +420,6 @@ mod property_token {
                 max_signatures_required: 5,
                 default_timeout_blocks: 100,
                 gas_limit_per_bridge: 500000,
-                emergency_pause: false,
                 metadata_preservation: true,
             };
 
@@ -420,6 +457,7 @@ mod property_token {
                 total_supply: 0,
                 token_counter: 0,
                 admin: caller,
+                circuit_breaker: InkCircuitBreaker::default(),
 
                 // Error logging and monitoring
                 error_counts: Mapping::default(),
@@ -573,6 +611,7 @@ mod property_token {
         /// ERC-721: Approves an account to transfer a specific token
         #[ink(message)]
         pub fn approve(&mut self, to: AccountId, token_id: TokenId) -> Result<(), Error> {
+            self.ensure_not_paused()?;
             let caller = self.env().caller();
             let token_owner = match self.token_owner.get(token_id) {
                 Some(owner) => owner,
@@ -622,6 +661,7 @@ mod property_token {
             operator: AccountId,
             approved: bool,
         ) -> Result<(), Error> {
+            self.ensure_not_paused()?;
             let caller = self.env().caller();
             self.operator_approvals
                 .insert((&caller, &operator), &approved);
@@ -825,7 +865,13 @@ mod property_token {
                 executable_at,
                 proposer: self.env().caller(),
             });
-            self.bridge_config.emergency_pause = true;
+            let now_seconds = self.now_seconds();
+            let caller = self.env().caller();
+            let transitions = self
+                .circuit_breaker
+                .emergency_pause(now_seconds, caller);
+            self.emit_circuit_breaker_transition(transitions.0);
+            self.emit_circuit_breaker_transition(transitions.1);
             self.env().emit_event(CodeHashProposed {
                 code_hash,
                 executable_at,
@@ -1644,10 +1690,7 @@ mod property_token {
                 return Err(Error::Unauthorized);
             }
 
-            // Check if bridge is paused
-            if self.bridge_config.emergency_pause {
-                return Err(Error::BridgePaused);
-            }
+            self.ensure_not_paused()?;
 
             // Validate destination chain
             if !self
@@ -2300,16 +2343,110 @@ mod property_token {
             Ok(())
         }
 
-        /// Pauses or unpauses the bridge (admin only)
+        /// Schedule a timed transfer and approval freeze through governance.
         #[ink(message)]
-        pub fn set_emergency_pause(&mut self, paused: bool) -> Result<(), Error> {
+        pub fn pause(&mut self, duration_seconds: u64) -> Result<(), Error> {
+            self.ensure_governance()?;
+            let now = self.now_seconds();
             let caller = self.env().caller();
-            if caller != self.admin {
-                return Err(Error::Unauthorized);
-            }
-
-            self.bridge_config.emergency_pause = paused;
+            let transition = self
+                .circuit_breaker
+                .pause(now, duration_seconds, caller)
+                .map_err(|_| Error::InvalidParameters)?;
+            self.emit_circuit_breaker_transition(transition);
             Ok(())
+        }
+
+        /// Immediately freeze transfers and approvals through governance.
+        #[ink(message)]
+        pub fn emergency_pause(&mut self) -> Result<(), Error> {
+            self.ensure_governance()?;
+            let now = self.now_seconds();
+            let caller = self.env().caller();
+            let transitions = self.circuit_breaker.emergency_pause(now, caller);
+            self.emit_circuit_breaker_transition(transitions.0);
+            self.emit_circuit_breaker_transition(transitions.1);
+            Ok(())
+        }
+
+        /// Schedule or activate an admin resume.
+        #[ink(message)]
+        pub fn resume(&mut self) -> Result<(), Error> {
+            self.ensure_admin()?;
+            let now = self.now_seconds();
+            let caller = self.env().caller();
+            let transition = self
+                .circuit_breaker
+                .resume(now, caller)
+                .map_err(|_| Error::InvalidParameters)?;
+            self.emit_circuit_breaker_transition(transition);
+            Ok(())
+        }
+
+        #[ink(message)]
+        pub fn is_paused(&mut self) -> bool {
+            self.sync_circuit_breaker();
+            let now = self.now_seconds();
+            self.circuit_breaker.is_paused(now)
+        }
+
+        fn now_seconds(&self) -> u64 {
+            self.env().block_timestamp() / 1_000
+        }
+
+        fn sync_circuit_breaker(&mut self) {
+            let now = self.now_seconds();
+            if let Some(transition) = self.circuit_breaker.sync(now) {
+                self.emit_circuit_breaker_transition(transition);
+            }
+        }
+
+        fn emit_circuit_breaker_transition(
+            &self,
+            transition: CircuitBreakerTransition<AccountId>,
+        ) {
+            match transition {
+                CircuitBreakerTransition::PauseScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                    pause_until,
+                    rescheduled_by,
+                } => self.env().emit_event(PauseScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                    pause_until,
+                    rescheduled_by,
+                }),
+                CircuitBreakerTransition::PauseActivated {
+                    activated_at,
+                    pause_until,
+                    emergency,
+                } => self.env().emit_event(PauseActivated {
+                    activated_at,
+                    pause_until,
+                    emergency,
+                }),
+                CircuitBreakerTransition::ResumeScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                } => self.env().emit_event(ResumeScheduled {
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                }),
+                CircuitBreakerTransition::ResumeActivated {
+                    activated_by,
+                    activated_at,
+                    automatic,
+                } => self.env().emit_event(ResumeActivated {
+                    activated_by,
+                    activated_at,
+                    automatic,
+                }),
+            }
         }
 
         /// Returns the total supply of tokens
@@ -2687,7 +2824,11 @@ mod property_token {
         fn pause_for_migration(&mut self) -> Result<(), MigrationError> {
             self.ensure_admin()
                 .map_err(|_| MigrationError::Unauthorized)?;
-            self.bridge_config.emergency_pause = true;
+            let now = self.now_seconds();
+            let caller = self.env().caller();
+            let transitions = self.circuit_breaker.emergency_pause(now, caller);
+            self.emit_circuit_breaker_transition(transitions.0);
+            self.emit_circuit_breaker_transition(transitions.1);
             Ok(())
         }
 
@@ -2696,7 +2837,13 @@ mod property_token {
         fn resume_after_migration(&mut self) -> Result<(), MigrationError> {
             self.ensure_admin()
                 .map_err(|_| MigrationError::Unauthorized)?;
-            self.bridge_config.emergency_pause = false;
+            let now = self.now_seconds();
+            let caller = self.env().caller();
+            let transition = self
+                .circuit_breaker
+                .resume(now, caller)
+                .map_err(|_| MigrationError::NotPaused)?;
+            self.emit_circuit_breaker_transition(transition);
             Ok(())
         }
 
@@ -2710,8 +2857,6 @@ mod property_token {
         ) -> Result<Vec<u8>, MigrationError> {
             self.ensure_admin()
                 .map_err(|_| MigrationError::Unauthorized)?;
-        ) -> Result<Vec<u8>, Error> {
-            self.ensure_admin()?;
             Ok(Vec::new())
         }
 
@@ -2731,14 +2876,6 @@ mod property_token {
     }
 
     impl PropertyToken {
-        /// Require the caller to be the token admin for privileged operations.
-        fn ensure_admin(&self) -> Result<(), Error> {
-            if self.env().caller() != self.admin {
-                return Err(Error::Unauthorized);
-            }
-            Ok(())
-        }
-
         /// Require the caller to be the configured governance contract.
         fn ensure_governance(&self) -> Result<(), Error> {
             match self.governance {
@@ -2748,10 +2885,12 @@ mod property_token {
             }
         }
 
-        /// Halt user-facing token and share movement while emergency pause is active.
-        fn ensure_not_paused(&self) -> Result<(), Error> {
-            if self.bridge_config.emergency_pause {
-                return Err(Error::BridgePaused);
+        /// Halt user-facing token and share movement while the breaker is active.
+        fn ensure_not_paused(&mut self) -> Result<(), Error> {
+            self.sync_circuit_breaker();
+            let now = self.now_seconds();
+            if self.circuit_breaker.is_paused(now) {
+                return Err(Error::ContractPaused);
             }
             Ok(())
         }
