@@ -26,6 +26,7 @@ describe('EventsService', () => {
 
     mockAuditService = new AuditService(
       mockAuditLogRepo as unknown as Repository<AuditLog>,
+      { get: () => 'test-correlation' } as any,
     );
     jest.spyOn(mockAuditService, 'logContractEvent').mockResolvedValue({
       id: 1,
@@ -48,6 +49,7 @@ describe('EventsService', () => {
       participantAddress: null,
       contributionXp: 0,
       epochNumber: null,
+      correlationId: 'test-correlation',
     } as AuditLog);
 
     mockWebhookRepo = {
@@ -77,6 +79,11 @@ describe('EventsService', () => {
         { provide: getRepositoryToken(Webhook), useValue: mockWebhookRepo },
         { provide: LeaderboardProofService, useValue: mockLeaderboardService },
         { provide: CryptoProvider, useValue: mockCryptoProvider },
+        {
+          provide: require('../common/correlation/correlation-id.store')
+            .CorrelationIdStore,
+          useValue: { get: () => 'test-correlation', run: (_id: string, fn: () => unknown) => fn() },
+        },
       ],
     }).compile();
 

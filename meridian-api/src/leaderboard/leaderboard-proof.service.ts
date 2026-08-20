@@ -4,6 +4,7 @@ import { Repository, Not, IsNull } from 'typeorm';
 import { AuditLog, AuditAction } from '../audit/audit-log.entity';
 import { LeaderboardEpoch } from './leaderboard-epoch.entity';
 import { ContractEvent } from '../events/events.service';
+import { CorrelationIdStore } from '../common/correlation/correlation-id.store';
 
 export interface ContributionExtraction {
   address: string | null;
@@ -26,7 +27,18 @@ export class LeaderboardProofService {
     private readonly epochRepo: Repository<LeaderboardEpoch>,
     @InjectRepository(AuditLog)
     private readonly auditRepo: Repository<AuditLog>,
+    private readonly correlationIdStore: CorrelationIdStore,
   ) {}
+
+  private logWithCorrelation(message: string, extra: Record<string, unknown> = {}): void {
+    this.logger.log(
+      JSON.stringify({
+        msg: message,
+        correlationId: this.correlationIdStore.get() ?? null,
+        ...extra,
+      }),
+    );
+  }
 
   async getOrCreateCurrentEpoch(): Promise<LeaderboardEpoch> {
     const latest = await this.epochRepo.findOne({
@@ -75,6 +87,7 @@ export class LeaderboardProofService {
   }
 
   async getProof(address: string, epoch: number) {
+    this.logWithCorrelation('leaderboard.getProof', { address, epoch });
     const epochRecord = await this.epochRepo.findOne({ where: { epoch } });
     if (!epochRecord) {
       return null;

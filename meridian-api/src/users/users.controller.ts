@@ -11,6 +11,7 @@ import {
   Patch,
   UseInterceptors,
   ClassSerializerInterceptor,
+  Logger,
 } from '@nestjs/common';
 import { CreateUserDto } from './dto/create-user.dto';
 import { GetuserParamDto } from './dto/user-param.dto';
@@ -36,6 +37,8 @@ import { UserPermissionQueryDto } from './dto/user-permission-query.dto';
 // TO GEt users
 @ApiTags('Users')
 export class UsersController {
+  private readonly logger = new Logger(UsersController.name);
+
   // performing an dependencies injection online 17
   constructor(private readonly userService: UserService) {}
 
@@ -75,8 +78,9 @@ export class UsersController {
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
   ) {
-    // we have tranform and validate our id,Query using pipe
-    console.log(getuserParamDto);
+    this.logger.debug(
+      JSON.stringify({ msg: 'users.getUsers', params: getuserParamDto }),
+    );
     return this.userService.findAll(getuserParamDto, limit, page);
   }
 

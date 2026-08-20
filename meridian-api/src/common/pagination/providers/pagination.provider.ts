@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { ObjectLiteral, Repository } from 'typeorm';
 import { Request } from 'express';
@@ -7,6 +7,8 @@ import { Paginated } from '../interfaces/paginated.interface';
 
 @Injectable()
 export class Pagination {
+  private readonly logger = new Logger(Pagination.name);
+
   constructor(
     @Inject(REQUEST)
     private readonly request: Request,
@@ -26,8 +28,9 @@ export class Pagination {
 
     const newUrl = new URL(this.request.url, baseUrl);
 
-    console.log(baseUrl);
-    console.log(newUrl);
+    this.logger.debug(
+      JSON.stringify({ msg: 'pagination.urls', baseUrl, href: newUrl.href }),
+    );
 
     const totalItems = await repository.count();
 

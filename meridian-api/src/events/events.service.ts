@@ -7,6 +7,8 @@ import { AuditService } from '../audit/audit.service';
 import { Webhook } from './webhook.entity';
 import { LeaderboardProofService } from '../leaderboard/leaderboard-proof.service';
 import { CryptoProvider } from 'src/crypto/providers/crypto.provider';
+import { CorrelationIdStore } from '../common/correlation/correlation-id.store';
+import { CORRELATION_ID_RESPONSE_HEADER } from '../common/correlation/correlation-id.constants';
 
 export interface ContractEvent {
   txHash: string;
@@ -46,6 +48,7 @@ export class EventsService implements OnModuleInit {
     // Envelope encryption (issue #631): webhook secrets are encrypted at
     // rest and only decrypted in-memory at delivery time.
     private readonly cryptoProvider: CryptoProvider,
+    private readonly correlationIdStore: CorrelationIdStore,
   ) {}
 
   onModuleInit(): void {
@@ -422,12 +425,16 @@ export class EventsService implements OnModuleInit {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 5000);
 
+        const correlationId =
+          auditEntry.correlationId ?? this.correlationIdStore.get() ?? '';
+
         const response = await fetch(wh.url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'X-Webhook-Signature': signature,
             'X-Webhook-Timestamp': Date.now().toString(),
+            [CORRELATION_ID_RESPONSE_HEADER]: correlationId,
           },
           body: payload,
           signal: controller.signal,
