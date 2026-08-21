@@ -63,6 +63,18 @@ export const envValidationSchema = Joi.object({
   UPLOAD_S3_ACCESS_KEY_ID: Joi.string().optional().allow(''),
   UPLOAD_S3_SECRET_ACCESS_KEY: Joi.string().optional().allow(''),
 
+  // Redis (issue #647): sliding-window rate limiter. Empty REDIS_URL uses
+  // in-process memory so tests and local boots still work.
+  REDIS_URL: Joi.string().uri().optional().allow(''),
+  RATE_LIMIT_ENABLED: Joi.boolean().default(true),
+  RATE_LIMIT_WINDOW_MS: Joi.number().integer().positive().default(60000),
+  RATE_LIMIT_READ_LIMIT: Joi.number().integer().positive().default(100),
+  RATE_LIMIT_WRITE_LIMIT: Joi.number().integer().positive().default(20),
+  RATE_LIMIT_AUTH_MULTIPLIER: Joi.number().positive().default(3),
+  RATE_LIMIT_ABUSE_THRESHOLD: Joi.number().integer().positive().default(5),
+  RATE_LIMIT_ABUSE_WINDOW_MS: Joi.number().integer().positive().default(60000),
+  RATE_LIMIT_ABUSE_FACTOR: Joi.number().min(0.1).max(1).default(0.5),
+
   // Envelope encryption (issue #631): the master Key Encryption Key (KEK)
   // that wraps per-user Data Encryption Keys. Provide either the raw
   // base64-encoded 32-byte key or a URL that returns { "key": "<base64>" }.

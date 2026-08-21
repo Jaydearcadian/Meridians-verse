@@ -35,6 +35,7 @@ import { AuditModule } from './audit/audit.module';
 import { EventsModule } from './events/events.module';
 import { CorrelationModule } from './common/correlation/correlation.module';
 import { CorrelationIdInterceptor } from './common/correlation/correlation-id.interceptor';
+import { RateLimitModule } from './rate-limit/rate-limit.module';
 
 @Module({
   imports: [
@@ -54,20 +55,26 @@ import { CorrelationIdInterceptor } from './common/correlation/correlation-id.in
     }),
 
     /**
-     * RATE LIMITING CONFIG
+     * RATE LIMITING CONFIG (issue #647)
+     * Named read/write throttlers feed default quotas; CustomThrottlerGuard
+     * enforces them via Redis sliding windows instead of in-memory storage.
      */
-    ThrottlerModule.forRoot([
-      {
-        name: 'read',
-        ttl: 60000,
-        limit: 100, // 100 requests per minute for GET
-      },
-      {
-        name: 'write',
-        ttl: 60000,
-        limit: 20, // 20 requests per minute for POST/PUT/PATCH/DELETE
-      },
-    ]),
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => [
+        {
+          name: 'read',
+          ttl: Number(config.get('RATE_LIMIT_WINDOW_MS') ?? 60_000),
+          limit: Number(config.get('RATE_LIMIT_READ_LIMIT') ?? 100),
+        },
+        {
+          name: 'write',
+          ttl: Number(config.get('RATE_LIMIT_WINDOW_MS') ?? 60_000),
+          limit: Number(config.get('RATE_LIMIT_WRITE_LIMIT') ?? 20),
+        },
+      ],
+    }),
+    RateLimitModule,
 
     /**
      * DATABASE CONFIG (Railway + Local Compatible)
