@@ -60,6 +60,7 @@ struct StaticAnalysisResults {
     complexity_warnings: usize,
     unsafe_blocks: usize,
     todos_found: usize,
+    unvalidated_entry_points: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -141,6 +142,19 @@ fn main() -> Result<()> {
                         content.matches("unsafe {").count();
                     audit_report.static_analysis.todos_found += content.matches("TODO").count();
                     audit_report.static_analysis.todos_found += content.matches("FIXME").count();
+
+                    if content.contains("#[ink(message)]") || content.contains("#[contractimpl]") {
+                        let sibling_validation = entry
+                            .path()
+                            .parent()
+                            .map(|parent| parent.join("validation.rs").exists())
+                            .unwrap_or(false);
+                        if !sibling_validation {
+                            audit_report.static_analysis.unvalidated_entry_points +=
+                                content.matches("#[ink(message)]").count()
+                                    + content.matches("pub fn ").count();
+                        }
+                    }
                 }
             }
 

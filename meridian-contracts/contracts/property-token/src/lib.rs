@@ -19,6 +19,8 @@ use stellar_insured_lib::circuit_breaker::{
     CircuitBreakerTransition, InkCircuitBreaker,
 };
 
+mod validation;
+
 #[ink::contract]
 mod property_token {
     use super::*;
