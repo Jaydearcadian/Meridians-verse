@@ -18,6 +18,8 @@ use stellar_insured_lib::circuit_breaker::{
 use ml_pipeline::*;
 use scale::Encode;
 
+mod validation;
+
 // Zero-knowledge proof of model execution — compiled with the `zk` feature.
 #[cfg(feature = "zk")]
 use ark_bn254::{Bn254, Fr};

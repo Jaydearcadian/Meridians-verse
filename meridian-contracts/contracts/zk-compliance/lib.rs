@@ -19,6 +19,8 @@
 
 #[path = "src/verification_keys.rs"]
 mod verification_keys;
+#[path = "src/validation.rs"]
+mod validation;
 
 #[ink::contract]
 mod zk_compliance {

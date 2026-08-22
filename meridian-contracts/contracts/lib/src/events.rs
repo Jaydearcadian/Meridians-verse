@@ -22,6 +22,25 @@ pub use event_indexer::{get_events_root, hash_event, record_event};
 /// shape changes so indexers can branch on compatibility.
 pub const EVENT_SCHEMA_VERSION: u32 = 1;
 
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidationFailedEvent {
+    pub code: u32,
+    pub field: Symbol,
+}
+
+pub fn emit_validation_failed(env: &Env, error: crate::ValidationError, field: Symbol) {
+    emit_event_with(
+        env,
+        Symbol::new(env, "VALIDATION"),
+        Symbol::new(env, "ValidationFailed"),
+        &ValidationFailedEvent {
+            code: error as u32,
+            field,
+        },
+    );
+}
+
 /// Canonical, chain-agnostic event schema emitted by every contract.
 ///
 /// `contract` + `action` are the Soroban event topics; the remaining fields

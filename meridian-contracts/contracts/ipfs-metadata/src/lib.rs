@@ -8,6 +8,8 @@ use ink::prelude::string::String;
 use ink::prelude::vec::Vec;
 use ink::storage::Mapping;
 
+mod validation;
+
 #[ink::contract]
 #[allow(clippy::too_many_arguments)]
 mod ipfs_metadata {

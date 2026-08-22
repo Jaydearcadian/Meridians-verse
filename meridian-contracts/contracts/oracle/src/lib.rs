@@ -26,6 +26,8 @@ mod propchain_oracle {
     };
     use scale::Encode;
 
+    mod validation;
+
     /// Property Valuation Oracle storage
     #[ink(storage)]
     pub struct PropertyValuationOracle {

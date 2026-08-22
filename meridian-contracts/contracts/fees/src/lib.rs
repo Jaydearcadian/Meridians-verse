@@ -10,6 +10,8 @@ use ink::storage::Mapping;
 use propchain_traits::DynamicFeeProvider;
 use propchain_traits::FeeOperation;
 
+mod validation;
+
 /// Dynamic Fee and Market Mechanism contract for PropChain.
 /// Implements congestion-based fees, premium listing auctions, validator incentives,
 /// and fee transparency for network participants.

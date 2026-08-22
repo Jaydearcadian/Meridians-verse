@@ -6,9 +6,11 @@
 //! Soroban's #[contracterror] attribute, replacing raw panic! calls
 //! with structured error codes that surface properly to SDK/API clients.
 
+#[cfg(feature = "soroban")]
 use soroban_sdk::contracterror;
 
 /// Escrow contract errors with explicit numeric codes
+#[cfg(feature = "soroban")]
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -36,6 +38,7 @@ pub enum EscrowError {
 }
 
 /// Risk pool contract errors
+#[cfg(feature = "soroban")]
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -55,6 +58,7 @@ pub enum RiskPoolError {
 }
 
 /// Governance contract errors
+#[cfg(feature = "soroban")]
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -90,6 +94,7 @@ pub enum GovernanceError {
 /// Oracle contract errors (Soroban version)
 /// 
 /// Note: For ink! contracts, use the OracleError enum in the traits crate
+#[cfg(feature = "soroban")]
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -101,6 +106,7 @@ pub enum OracleError {
 }
 
 /// Common validation errors shared across contracts
+#[cfg(feature = "soroban")]
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -115,4 +121,41 @@ pub enum ValidationError {
     InvalidMultisigConfig = 4,
     /// Contract is paused
     ContractPaused = 5,
+    /// Arithmetic overflow occurred
+    Overflow = 6,
+    /// Arithmetic underflow occurred
+    Underflow = 7,
+    /// Value is outside the permitted range
+    OutOfRange = 8,
+    /// Caller is not authorized
+    Unauthorized = 9,
+    /// Operation is invalid for the current state
+    InvalidState = 10,
+    /// Contract or required configuration is not initialized
+    NotInitialized = 11,
+    /// String length is outside the permitted range
+    InvalidStringLength = 12,
+    /// Enum discriminant is outside the permitted range
+    InvalidEnumRange = 13,
+    /// Cross-field constraint failed
+    CrossFieldConstraint = 14,
+}
+
+#[cfg(feature = "ink")]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, scale::Encode, scale::Decode)]
+pub enum ValidationError {
+    ZeroAddress,
+    NonPositiveAmount,
+    InvalidTimestamp,
+    InvalidMultisigConfig,
+    ContractPaused,
+    Overflow,
+    Underflow,
+    OutOfRange,
+    Unauthorized,
+    InvalidState,
+    NotInitialized,
+    InvalidStringLength,
+    InvalidEnumRange,
+    CrossFieldConstraint,
 }
