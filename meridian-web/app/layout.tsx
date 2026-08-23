@@ -5,6 +5,8 @@ import './globals.css'
 import { ThemeProvider } from '@/components/theme-provider'
 import { Toaster } from '@/components/ui/sonner'
 import { PerformanceMonitor } from '@/components/performance-monitor'
+import { InstallPrompt } from '@/components/pwa/install-prompt'
+import { SW_REGISTRATION_SCRIPT } from '@/lib/pwa/service-worker'
 import { MotionConfig } from 'framer-motion'
 
 const _geist = Geist({ subsets: ["latin"], display: "swap", preload: true });
@@ -15,6 +17,14 @@ export const metadata: Metadata = {
   description:
     'A productivity-powered on-chain economy platform combining focus, payment streams, and yield opportunities.',
   generator: 'v0.app',
+  applicationName: 'MERIDIAN',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    title: 'MERIDIAN',
+    // The dark status bar matches the PWA splash background.
+    statusBarStyle: 'black-translucent',
+  },
   metadataBase: new URL(
     process.env.NEXT_PUBLIC_SITE_URL ?? 'https://meridian.app',
   ),
@@ -55,6 +65,9 @@ export const viewport: Viewport = {
     { media: '(prefers-color-scheme: light)', color: '#fcfcfc' },
     { media: '(prefers-color-scheme: dark)', color: '#161616' },
   ],
+  // Standalone installs run edge-to-edge; `globals.css` pads with the safe-area
+  // insets so content clears the notch and home indicator.
+  viewportFit: 'cover',
 }
 
 export default function RootLayout({
@@ -71,6 +84,15 @@ export default function RootLayout({
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        {/*
+          Registers the service worker before hydration so a repeat visit is
+          served from the cache even if the JS bundle never finishes loading.
+          The script defers the actual register() call to window load.
+        */}
+        <script
+          id="meridian-sw-registration"
+          dangerouslySetInnerHTML={{ __html: SW_REGISTRATION_SCRIPT }}
+        />
       </head>
       <body className="font-sans antialiased">
         <ThemeProvider
@@ -85,10 +107,10 @@ export default function RootLayout({
             {children}
           </MotionConfig>
           <Toaster />
+          <InstallPrompt />
           <PerformanceMonitor />
         </ThemeProvider>
         {process.env.NODE_ENV === 'production' && <Analytics />}
-        <PerformanceMonitor />
       </body>
     </html>
   )

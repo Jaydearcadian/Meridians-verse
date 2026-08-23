@@ -3,6 +3,8 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { useErrorToast } from '@/hooks/use-error-toast';
+import { readSyncQueue, requestBackgroundSync, writeSyncQueue } from '@/lib/pwa/sync-queue';
+import { subscribeToServiceWorkerMessages } from '@/lib/pwa/service-worker';
 
 export interface FocusSession {
   startTime: number;
@@ -82,6 +84,36 @@ export function FocusProvider({ children }: { children: React.ReactNode }) {
   const [isActive, setIsActive] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
+  // The queue is also read outside of React (service worker sync acks, the
+  // `online` handler), so keep a ref alongside the state to avoid stale reads.
+  const offlineQueueRef = useRef<QueuedSession[]>([]);
+
+  /**
+   * Single write path for the queue: React state, localStorage (synchronous
+   * reads on next boot) and the IndexedDB mirror the service worker reads
+   * during a Background Sync event.
+   *
+   * Storage is written even after unmount — the worker still needs an accurate
+   * queue — but the React state update is skipped.
+   */
+  const persistQueue = useCallback(async (queue: QueuedSession[]) => {
+    offlineQueueRef.current = queue;
+    if (isMountedRef.current) setOfflineQueue(queue);
+
+    try {
+      localStorage.setItem('focus_offline_queue', JSON.stringify(queue));
+    } catch (e) {
+      console.error('Failed to persist offline queue:', e);
+    }
+
+    await writeSyncQueue(queue);
+
+    // Ask the browser to wake the worker as soon as connectivity returns.
+    if (queue.length > 0) {
+      await requestBackgroundSync();
+    }
+  }, []);
+
   // Load state on mount (Client-side only)
   useEffect(() => {
     let completionTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -97,7 +129,11 @@ export function FocusProvider({ children }: { children: React.ReactNode }) {
       if (storedStreak) setStreak(parseInt(storedStreak, 10));
       if (storedLastCompleted) setLastCompleted(parseInt(storedLastCompleted, 10));
       if (storedTier) setSuperchargeTier(storedTier as SuperchargeTier);
-      if (storedQueue) setOfflineQueue(JSON.parse(storedQueue));
+      if (storedQueue) {
+        const parsed: QueuedSession[] = JSON.parse(storedQueue);
+        setOfflineQueue(parsed);
+        offlineQueueRef.current = parsed;
+      }
 
       // Handle daily XP loading / reset
       const storedTodayXp = localStorage.getItem('focus_today_xp');
@@ -158,19 +194,28 @@ export function FocusProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(interval);
   }, [isActive, timeLeft, activeSession]);
 
-  // Sync offline queue helper
-  const syncOfflineQueue = useCallback(async () => {
-    if (offlineQueue.length === 0) return;
-    if (typeof window !== 'undefined' && !navigator.onLine) return;
-    if (isSyncingRef.current) return;
+  /**
+   * Drain the queue oldest-first, stopping at the first failure so ordering is
+   * preserved. Returns whether the queue is now empty, which is what the
+   * service worker's Background Sync event waits on before it stops retrying.
+   */
+  const drainQueue = useCallback(async (): Promise<{ synced: boolean; count: number }> => {
+    const queue = offlineQueueRef.current;
+    if (queue.length === 0) return { synced: true, count: 0 };
+    if (typeof window !== 'undefined' && !navigator.onLine) {
+      return { synced: false, count: 0 };
+    }
+    // A Background Sync event and the `online` handler can fire together;
+    // without this guard both would replay the same sessions.
+    if (isSyncingRef.current) return { synced: false, count: 0 };
 
     isSyncingRef.current = true;
     setIsLoading(true);
     let successCount = 0;
-    const remainingQueue = [...offlineQueue];
+    const remainingQueue = [...queue];
 
     try {
-      for (const session of offlineQueue) {
+      for (const session of queue) {
         try {
           await recordSessionOnChain(session.durationMinutes, session.xpEarned);
           successCount++;
@@ -181,29 +226,73 @@ export function FocusProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      if (isMountedRef.current) {
-        setOfflineQueue(remainingQueue);
-        localStorage.setItem('focus_offline_queue', JSON.stringify(remainingQueue));
+      await persistQueue(remainingQueue);
 
-        if (successCount > 0) {
-          toast.success(`Successfully synced ${successCount} focus session(s) to Stellar chain!`);
-        }
+      if (isMountedRef.current && successCount > 0) {
+        toast.success(`Successfully synced ${successCount} focus session(s) to Stellar chain!`);
       }
     } finally {
       if (isMountedRef.current) setIsLoading(false);
       isSyncingRef.current = false;
     }
-  }, [offlineQueue]);
 
-  // Auto-sync when coming back online
+    return { synced: remainingQueue.length === 0, count: successCount };
+  }, [persistQueue]);
+
+  // Sync offline queue helper (public API)
+  const syncOfflineQueue = useCallback(async () => {
+    await drainQueue();
+  }, [drainQueue]);
+
+  // Rehydrate from the IndexedDB mirror: a Background Sync may have run (or
+  // failed) while no page was open, and localStorage can be cleared
+  // independently of it.
+  useEffect(() => {
+    let cancelled = false;
+
+    readSyncQueue().then((records) => {
+      if (cancelled) return;
+
+      const merged = [...offlineQueueRef.current];
+      for (const record of records) {
+        if (!merged.some((session) => session.id === record.id)) merged.push(record);
+      }
+      if (merged.length === 0) return;
+      merged.sort((a, b) => a.timestamp - b.timestamp);
+
+      // Round-trip through persistQueue so both stores end up consistent —
+      // sessions queued before this feature existed are only in localStorage.
+      persistQueue(merged).then(() => {
+        // Anything left over from a previous visit goes out now if we're online.
+        if (typeof navigator === 'undefined' || navigator.onLine) drainQueue();
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [drainQueue, persistQueue]);
+
+  // Auto-sync when coming back online. This is also the fallback path on
+  // browsers without Background Sync (Safari, Firefox).
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handleOnline = () => {
-      syncOfflineQueue();
+      drainQueue();
     };
     window.addEventListener('online', handleOnline);
     return () => window.removeEventListener('online', handleOnline);
-  }, [syncOfflineQueue]);
+  }, [drainQueue]);
+
+  // Background Sync: the worker owns the retry schedule but the on-chain call
+  // has to happen here, so it delegates to the page and waits for the ack.
+  useEffect(() => {
+    return subscribeToServiceWorkerMessages('SYNC_FOCUS_QUEUE', (_data, port) => {
+      drainQueue()
+        .then((result) => port?.postMessage({ synced: result.synced, count: result.count }))
+        .catch(() => port?.postMessage({ synced: false, count: 0 }));
+    });
+  }, [drainQueue]);
 
   // Start Focus Session
   const startSession = (durationMinutes: number) => {
@@ -328,10 +417,11 @@ export function FocusProvider({ children }: { children: React.ReactNode }) {
         timestamp: completionTime,
       };
       
+      // persistQueue also registers the Background Sync tag, so the session
+      // settles even if the tab is closed before connectivity returns.
+      await persistQueue([...offlineQueueRef.current, queuedSession]);
+
       if (isMountedRef.current) {
-        const newQueue = [...offlineQueue, queuedSession];
-        setOfflineQueue(newQueue);
-        localStorage.setItem('focus_offline_queue', JSON.stringify(newQueue));
         triggerErrorToast(err, { scope: 'focus-session' });
       }
     } finally {
