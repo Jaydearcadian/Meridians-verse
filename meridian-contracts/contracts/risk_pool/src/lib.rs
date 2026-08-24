@@ -325,6 +325,71 @@ impl RiskPoolContract {
         Ok(())
     }
 
+    // =========================================================================
+    // BATCH ENTRY POINTS
+    // =========================================================================
+
+    /// Deposit liquidity for multiple providers in a single transaction.
+    ///
+    /// Each element of `deposits` is `(provider, amount)`. All-or-nothing
+    /// semantics: if any deposit fails the entire transaction is rolled back.
+    pub fn deposit_liquidity_batch(
+        env: Env,
+        deposits: soroban_sdk::Vec<(Address, i128)>,
+    ) -> Result<u32, RiskPoolError> {
+        if deposits.is_empty() {
+            return Err(RiskPoolError::InvalidAmount);
+        }
+        if deposits.len() > 50 {
+            panic!("Batch exceeds maximum size of 50");
+        }
+
+        let mut count = 0u32;
+        for i in 0..deposits.len() {
+            let (provider, amount) = deposits.get(i).unwrap();
+            RiskPoolContract::deposit_liquidity(env.clone(), provider, amount)?;
+            count += 1;
+        }
+
+        emit_event_with(
+            &env,
+            symbol_short!("RPOOL"),
+            symbol_short!("BTCHDEP"),
+            &(count),
+        );
+        Ok(count)
+    }
+
+    /// Withdraw liquidity for multiple providers in a single transaction.
+    ///
+    /// Each element of `withdrawals` is `(provider, amount)`. All-or-nothing.
+    pub fn withdraw_liquidity_batch(
+        env: Env,
+        withdrawals: soroban_sdk::Vec<(Address, i128)>,
+    ) -> Result<u32, RiskPoolError> {
+        if withdrawals.is_empty() {
+            return Err(RiskPoolError::InvalidAmount);
+        }
+        if withdrawals.len() > 50 {
+            panic!("Batch exceeds maximum size of 50");
+        }
+
+        let mut count = 0u32;
+        for i in 0..withdrawals.len() {
+            let (provider, amount) = withdrawals.get(i).unwrap();
+            RiskPoolContract::withdraw_liquidity(env.clone(), provider, amount)?;
+            count += 1;
+        }
+
+        emit_event_with(
+            &env,
+            symbol_short!("RPOOL"),
+            symbol_short!("BTCHWDR"),
+            &(count),
+        );
+        Ok(count)
+    }
+
     pub fn get_pool_stats(env: Env) -> PoolStats {
         PoolStats {
             total_capital: get_total_capital(&env),

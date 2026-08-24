@@ -296,6 +296,123 @@ impl AdvancedEscrow {
         Ok(())
     }
 
+    // =========================================================================
+    // BATCH ENTRY POINTS
+    // =========================================================================
+
+    /// Create multiple escrows in a single transaction (all-or-nothing).
+    ///
+    /// Each element of `requests` bundles all parameters of
+    /// `create_escrow_advanced`. Returns the vector of newly created escrow IDs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_escrows_batch(
+        env: Env,
+        requests: soroban_sdk::Vec<(
+            u64,   // property_id
+            i128,  // amount
+            Address, // buyer
+            Address, // seller
+            soroban_sdk::Vec<Address>, // participants
+            u32,   // required_signatures
+            Option<u64>, // release_time_lock
+            u64,   // nonce
+        )>,
+    ) -> Result<soroban_sdk::Vec<u64>, EscrowError> {
+        if requests.is_empty() {
+            return Err(EscrowError::InvalidNonce);
+        }
+        if requests.len() > 20 {
+            panic!("Batch exceeds maximum size of 20");
+        }
+
+        let mut ids: soroban_sdk::Vec<u64> = soroban_sdk::Vec::new(&env);
+
+        for i in 0..requests.len() {
+            let (property_id, amount, buyer, seller, participants, required_signatures, release_time_lock, nonce) =
+                requests.get(i).unwrap();
+            let id = AdvancedEscrow::create_escrow_advanced(
+                env.clone(),
+                property_id,
+                amount,
+                buyer,
+                seller,
+                participants,
+                required_signatures,
+                release_time_lock,
+                nonce,
+            )?;
+            ids.push_back(id);
+        }
+
+        emit_event_with(
+            &env,
+            symbol_short!("ESCROW"),
+            symbol_short!("BTCHCR"),
+            &(ids.len() as u32),
+        );
+        Ok(ids)
+    }
+
+    /// Deposit funds into multiple escrows in a single transaction.
+    ///
+    /// Each element of `deposits` is `(escrow_id, amount)`.
+    pub fn deposit_funds_batch(
+        env: Env,
+        deposits: soroban_sdk::Vec<(u64, i128)>,
+    ) -> Result<u32, EscrowError> {
+        if deposits.is_empty() {
+            return Err(EscrowError::EscrowNotFound);
+        }
+        if deposits.len() > 50 {
+            panic!("Batch exceeds maximum size of 50");
+        }
+
+        let mut count = 0u32;
+        for i in 0..deposits.len() {
+            let (escrow_id, amount) = deposits.get(i).unwrap();
+            AdvancedEscrow::deposit_funds(env.clone(), escrow_id, amount)?;
+            count += 1;
+        }
+
+        emit_event_with(
+            &env,
+            symbol_short!("ESCROW"),
+            symbol_short!("BTCHFND"),
+            &(count),
+        );
+        Ok(count)
+    }
+
+    /// Sign approval for multiple escrows in a single transaction.
+    ///
+    /// Each element of `approvals` is `(escrow_id, approval_type, signer)`.
+    pub fn sign_approval_batch(
+        env: Env,
+        approvals: soroban_sdk::Vec<(u64, types::ApprovalType, Address)>,
+    ) -> Result<u32, EscrowError> {
+        if approvals.is_empty() {
+            return Err(EscrowError::EscrowNotFound);
+        }
+        if approvals.len() > 50 {
+            panic!("Batch exceeds maximum size of 50");
+        }
+
+        let mut count = 0u32;
+        for i in 0..approvals.len() {
+            let (escrow_id, approval_type, signer) = approvals.get(i).unwrap();
+            AdvancedEscrow::sign_approval(env.clone(), escrow_id, approval_type, signer)?;
+            count += 1;
+        }
+
+        emit_event_with(
+            &env,
+            symbol_short!("ESCROW"),
+            symbol_short!("BTCHSGN"),
+            &(count),
+        );
+        Ok(count)
+    }
+
     pub fn migrate(
         env: Env,
         admin: Address,

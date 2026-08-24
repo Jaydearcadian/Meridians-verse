@@ -20,11 +20,18 @@ pub mod validation;
 #[cfg(all(feature = "verification", feature = "soroban"))]
 pub mod verification;
 #[cfg(feature = "soroban")]
+pub mod batch;
+#[cfg(feature = "soroban")]
 pub mod zk;
 
 #[cfg(feature = "soroban")]
 pub use access_control::{
     has_role, init_access_control, require_role, revoke_role, set_role, AccessControlRole,
+};
+#[cfg(feature = "soroban")]
+pub use batch::{
+    apply_discount, batch_discount_bps, err_item, finalize, ok_item, BatchItemResult, BatchResult,
+    GasMeter, MAX_BATCH_SIZE,
 };
 pub use circuit_breaker::*;
 #[cfg(any(feature = "soroban", feature = "ink"))]

@@ -271,6 +271,29 @@ mod propchain_fees {
         timestamp: u64,
     }
 
+    #[ink(event)]
+    pub struct BatchFeeCollected {
+        #[ink(topic)]
+        by: AccountId,
+        operation: FeeOperation,
+        item_count: u32,
+        total_fee: u128,
+        discount_bps: u32,
+        timestamp: u64,
+    }
+
+    /// Return the batch discount in basis points for a given item count.
+    /// Mirrors the schedule in the shared Soroban lib's batch module.
+    fn batch_discount_bps(item_count: u32) -> u32 {
+        match item_count {
+            0..=4 => 0,
+            5..=9 => 500,
+            10..=19 => 1_000,
+            20..=49 => 1_500,
+            _ => 2_000,
+        }
+    }
+
     /// Dynamic fee calculation: base * (1 + congestion_factor + demand_factor)
     fn compute_dynamic_fee(
         config: &FeeConfig,
@@ -374,6 +397,36 @@ mod propchain_fees {
             let congestion = self.congestion_index();
             let demand_bp = self.demand_factor_bp();
             compute_dynamic_fee(&config, congestion, demand_bp)
+        }
+
+        /// Calculate the total fee for a batch of `item_count` identical operations,
+        /// applying a tiered discount based on batch size.
+        ///
+        /// Discount schedule (basis points off the aggregate fee):
+        /// | items | discount |
+        /// |-------|----------|
+        /// | 1-4   | 0%       |
+        /// | 5-9   | 5%       |
+        /// | 10-19 | 10%      |
+        /// | 20-49 | 15%      |
+        /// | 50+   | 20%      |
+        #[ink(message)]
+        pub fn calculate_batch_fee(&self, operation: FeeOperation, item_count: u32) -> u128 {
+            if item_count == 0 {
+                return 0;
+            }
+            let unit_fee = self.calculate_fee(operation);
+            let aggregate = unit_fee.saturating_mul(item_count as u128);
+            let discount_bps = batch_discount_bps(item_count) as u128;
+            let discount = aggregate.saturating_mul(discount_bps) / 10_000;
+            aggregate.saturating_sub(discount)
+        }
+
+        /// Return the discount in basis points that will be applied for a batch
+        /// of the given size.  Useful for off-chain fee-estimation tooling.
+        #[ink(message)]
+        pub fn batch_discount_bps(&self, item_count: u32) -> u32 {
+            batch_discount_bps(item_count)
         }
 
         /// Record that a fee was collected (called by registry or self after charging)
