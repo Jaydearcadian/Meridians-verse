@@ -1,9 +1,12 @@
 #![no_std]
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
-use stellar_insured_lib::events::emit_event_with;
-use stellar_insured_lib::{InsurancePolicy, PolicyParams, PolicyPatch, PolicyStatus, PolicyType, StatusPatch};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
+use stellar_insured_lib::events::emit_event_with;
+use stellar_insured_lib::state_root::get_state_root;
+use stellar_insured_lib::{
+    InsurancePolicy, PolicyParams, PolicyPatch, PolicyStatus, PolicyType, StatusPatch,
+};
 
 #[contracttype]
 #[derive(Clone)]
@@ -37,15 +40,23 @@ fn policy_params_or_default(env: &Env) -> PolicyParams {
 // --- Storage helpers (#378: data access abstraction) ---
 
 fn get_policy_counter(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::PolicyCounter).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::PolicyCounter)
+        .unwrap_or(0)
 }
 
 fn get_policy_inner(env: &Env, policy_id: u64) -> InsurancePolicy {
-    env.storage().persistent().get(&DataKey::Policy(policy_id)).expect("Policy not found")
+    env.storage()
+        .persistent()
+        .get(&DataKey::Policy(policy_id))
+        .expect("Policy not found")
 }
 
 fn set_policy(env: &Env, policy_id: u64, policy: &InsurancePolicy) {
-    env.storage().persistent().set(&DataKey::Policy(policy_id), policy);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Policy(policy_id), policy);
 }
 
 // --------------------------------------------------------
@@ -91,9 +102,14 @@ impl PolicyContract {
 
         let mut counter = get_policy_counter(&env);
         counter += 1;
-        env.storage().instance().set(&DataKey::PolicyCounter, &counter);
+        env.storage()
+            .instance()
+            .set(&DataKey::PolicyCounter, &counter);
 
-        let risk_pool: Address = env.storage().instance().get(&DataKey::RiskPool)
+        let risk_pool: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::RiskPool)
             .unwrap_or_else(|| panic!("Contract not initialized"));
 
         let policy = InsurancePolicy {
@@ -115,7 +131,13 @@ impl PolicyContract {
             &env,
             symbol_short!("POLICY"),
             symbol_short!("ISSUED"),
-            &(counter, holder, coverage_amount, premium_amount, duration_days),
+            &(
+                counter,
+                holder,
+                coverage_amount,
+                premium_amount,
+                duration_days,
+            ),
         );
 
         counter
@@ -123,6 +145,10 @@ impl PolicyContract {
 
     pub fn get_policy(env: Env, policy_id: u64) -> InsurancePolicy {
         get_policy_inner(&env, policy_id)
+    }
+
+    pub fn get_state_root(env: Env) -> soroban_sdk::BytesN<32> {
+        get_state_root(&env)
     }
 
     // Alias used by claims contract cross-contract call
@@ -194,7 +220,9 @@ impl PolicyContract {
     pub fn set_claims_contract(env: Env, claims_contract: Address) {
         let caller = env.current_contract_address();
         access_control::require_role(&env, &caller, &AccessControlRole::Admin);
-        env.storage().instance().set(&DataKey::ClaimsContract, &claims_contract);
+        env.storage()
+            .instance()
+            .set(&DataKey::ClaimsContract, &claims_contract);
     }
 
     // #609: register the Governance contract trusted to patch policies and
@@ -202,7 +230,9 @@ impl PolicyContract {
     pub fn set_governance_contract(env: Env, governance_contract: Address) {
         let caller = env.current_contract_address();
         access_control::require_role(&env, &caller, &AccessControlRole::Admin);
-        env.storage().instance().set(&DataKey::GovernanceContract, &governance_contract);
+        env.storage()
+            .instance()
+            .set(&DataKey::GovernanceContract, &governance_contract);
     }
 
     pub fn get_policy_params(env: Env) -> PolicyParams {
@@ -214,7 +244,10 @@ impl PolicyContract {
     // trusted address from storage and require its auth, rather than trusting
     // a caller-supplied address.
     pub fn apply_governance_update(env: Env, policy_id: u64, patch: PolicyPatch) {
-        let governance_contract: Address = env.storage().instance().get(&DataKey::GovernanceContract)
+        let governance_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::GovernanceContract)
             .expect("Governance contract not set");
         governance_contract.require_auth();
 
@@ -247,13 +280,21 @@ impl PolicyContract {
 
         set_policy(&env, policy_id, &policy);
 
-        emit_event_with(&env, symbol_short!("POLICY"), symbol_short!("GOV_UPD"), &policy_id);
+        emit_event_with(
+            &env,
+            symbol_short!("POLICY"),
+            symbol_short!("GOV_UPD"),
+            &policy_id,
+        );
     }
 
     // #609: DAO-governed parameter update. Same trust model as
     // `apply_governance_update` — only the registered Governance contract may call.
     pub fn apply_governance_params(env: Env, params: PolicyParams) {
-        let governance_contract: Address = env.storage().instance().get(&DataKey::GovernanceContract)
+        let governance_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::GovernanceContract)
             .expect("Governance contract not set");
         governance_contract.require_auth();
 
@@ -261,7 +302,9 @@ impl PolicyContract {
             panic!("Invalid policy params");
         }
 
-        env.storage().instance().set(&DataKey::PolicyParams, &params);
+        env.storage()
+            .instance()
+            .set(&DataKey::PolicyParams, &params);
 
         emit_event_with(
             &env,
@@ -272,7 +315,10 @@ impl PolicyContract {
     }
 
     pub fn update_claimed(env: Env, policy_id: u64, amount: i128) {
-        let claims_contract: Address = env.storage().instance().get(&DataKey::ClaimsContract)
+        let claims_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::ClaimsContract)
             .expect("Claims contract not set");
         claims_contract.require_auth();
 
@@ -320,7 +366,7 @@ impl PolicyContract {
 mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Env, Address};
+    use soroban_sdk::{Address, Env};
 
     fn setup() -> (Env, Address, Address, Address) {
         let env = Env::default();
@@ -338,7 +384,11 @@ mod tests {
             PolicyContract::initialize(env.clone(), admin.clone(), risk);
         });
         env.as_contract(&contract, || {
-            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
+            assert!(access_control::has_role(
+                &env,
+                &admin,
+                &AccessControlRole::Admin
+            ));
         });
     }
 
@@ -370,9 +420,18 @@ mod tests {
 
     // #609: apply_governance_update / apply_governance_params coverage.
 
-    fn seed_policy(env: &Env, contract: &Address, governance: &Address, holder: &Address, risk_pool: &Address, total_claimed: i128) {
+    fn seed_policy(
+        env: &Env,
+        contract: &Address,
+        governance: &Address,
+        holder: &Address,
+        risk_pool: &Address,
+        total_claimed: i128,
+    ) {
         env.as_contract(contract, || {
-            env.storage().instance().set(&DataKey::GovernanceContract, governance);
+            env.storage()
+                .instance()
+                .set(&DataKey::GovernanceContract, governance);
             let policy = InsurancePolicy {
                 policy_id: 1,
                 holder: holder.clone(),
@@ -466,7 +525,10 @@ mod tests {
             PolicyContract::set_governance_contract(env.clone(), governance.clone());
         });
 
-        let params = PolicyParams { max_coverage_amount: 500, min_premium_amount: 50 };
+        let params = PolicyParams {
+            max_coverage_amount: 500,
+            min_premium_amount: 50,
+        };
         env.as_contract(&contract, || {
             PolicyContract::apply_governance_params(env.clone(), params);
         });

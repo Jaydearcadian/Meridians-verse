@@ -87,7 +87,11 @@ mod harnesses {
         kani::assume(claim_amount > 0);
         kani::assume(coverage >= 0);
         kani::assume(total_claimed + claim_amount > coverage);
-        assert!(!claim_within_coverage(total_claimed, claim_amount, coverage));
+        assert!(!claim_within_coverage(
+            total_claimed,
+            claim_amount,
+            coverage
+        ));
     }
 
     /// Verify claim_within_coverage rejects non-positive amounts.
@@ -99,7 +103,11 @@ mod harnesses {
         kani::assume(total_claimed >= 0);
         kani::assume(claim_amount <= 0);
         kani::assume(coverage >= 0);
-        assert!(!claim_within_coverage(total_claimed, claim_amount, coverage));
+        assert!(!claim_within_coverage(
+            total_claimed,
+            claim_amount,
+            coverage
+        ));
     }
 
     /// Verify withdrawal_within_available for valid inputs.
@@ -154,7 +162,12 @@ mod harnesses {
         kani::assume(withdrawal >= 0);
         kani::assume(withdrawal <= original + deposit);
         let final_total = original + deposit - withdrawal;
-        assert!(deposit_withdraw_roundtrip(original, deposit, withdrawal, final_total));
+        assert!(deposit_withdraw_roundtrip(
+            original,
+            deposit,
+            withdrawal,
+            final_total
+        ));
     }
 
     /// Verify vote_sum_equals_total_weight.

@@ -7,11 +7,7 @@ pub struct AdminConfig {
 }
 
 /// Require a unique threshold of configured Soroban signers for an action.
-pub fn verify_multisig(
-    env: &Env,
-    signers: Vec<Address>,
-    config: &AdminConfig,
-) -> bool {
+pub fn verify_multisig(env: &Env, signers: Vec<Address>, config: &AdminConfig) -> bool {
     const MAX_SIGNATURES: u32 = 20;
 
     // Prevent unbounded input processing and invalid threshold configurations.

@@ -1,9 +1,13 @@
 #![no_std]
 
+use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
-use stellar_insured_lib::events::emit_event_with;
-use stellar_insured_lib::RiskPoolError;
 use stellar_insured_lib::access_control::{self, AccessControlRole};
+use stellar_insured_lib::events::emit_event_with;
+use stellar_insured_lib::state_root::{
+    compute_root, get_state_root as read_state_root, set_state_root,
+};
+use stellar_insured_lib::RiskPoolError;
 
 #[cfg(test)]
 mod migration_test;
@@ -50,15 +54,47 @@ fn get_token(env: &Env) -> Address {
 }
 
 fn get_total_capital(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::TotalCapital).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalCapital)
+        .unwrap_or(0)
 }
 
 fn get_available_capital(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::AvailableCapital).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::AvailableCapital)
+        .unwrap_or(0)
 }
 
 fn get_provider_stake(env: &Env, provider: &Address) -> i128 {
-    env.storage().persistent().get(&DataKey::ProviderStake(provider.clone())).unwrap_or(0)
+    env.storage()
+        .persistent()
+        .get(&DataKey::ProviderStake(provider.clone()))
+        .unwrap_or(0)
+}
+
+fn refresh_state_root(env: &Env) {
+    let stats = PoolStats {
+        total_capital: get_total_capital(env),
+        available_capital: get_available_capital(env),
+        total_claims_paid: env
+            .storage()
+            .instance()
+            .get(&DataKey::ClaimsPaid)
+            .unwrap_or(0),
+    };
+    let mut entries = soroban_sdk::Vec::new(env);
+    entries.push_back(stats.to_xdr(env));
+    entries.push_back(
+        env.storage()
+            .instance()
+            .get(&DataKey::Version)
+            .unwrap_or(StorageVersion::V1)
+            .to_xdr(env),
+    );
+    let root = compute_root(env, entries);
+    set_state_root(env, &root);
 }
 
 // --------------------------------------------------------
@@ -68,7 +104,12 @@ pub struct RiskPoolContract;
 
 #[contractimpl]
 impl RiskPoolContract {
-    pub fn initialize(env: Env, admin: Address, token: Address, min_stake: i128) -> Result<(), RiskPoolError> {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        token: Address,
+        min_stake: i128,
+    ) -> Result<(), RiskPoolError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(RiskPoolError::AlreadyInitialized);
         }
@@ -76,11 +117,18 @@ impl RiskPoolContract {
         env.storage().instance().set(&DataKey::Token, &token);
         env.storage().instance().set(&DataKey::MinStake, &min_stake);
         env.storage().instance().set(&DataKey::TotalCapital, &0i128);
-        env.storage().instance().set(&DataKey::AvailableCapital, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::AvailableCapital, &0i128);
         env.storage().instance().set(&DataKey::ClaimsPaid, &0i128);
-        env.storage().instance().set(&DataKey::Version, &StorageVersion::current());
-        env.storage().instance().set(&DataKey::LockedCapital, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &StorageVersion::current());
+        env.storage()
+            .instance()
+            .set(&DataKey::LockedCapital, &0i128);
         access_control::init_access_control(&env, &admin);
+        refresh_state_root(&env);
         Ok(())
     }
 
@@ -89,31 +137,48 @@ impl RiskPoolContract {
         Ok(())
     }
 
-    pub fn deposit_liquidity(env: Env, provider: Address, amount: i128) -> Result<(), RiskPoolError> {
+    pub fn deposit_liquidity(
+        env: Env,
+        provider: Address,
+        amount: i128,
+    ) -> Result<(), RiskPoolError> {
         provider.require_auth();
-        
-        let min_stake: i128 = env.storage().instance().get(&DataKey::MinStake)
+
+        let min_stake: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinStake)
             .ok_or(RiskPoolError::NotInitialized)?;
 
         if amount < min_stake {
             return Err(RiskPoolError::BelowMinimumStake);
         }
 
-        let token: Address = env.storage().instance().get(&DataKey::Token)
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
             .ok_or(RiskPoolError::NotInitialized)?;
-        
+
         // Transfer tokens from provider to this contract
         let client = soroban_sdk::token::Client::new(&env, &token);
         client.transfer(&provider, &env.current_contract_address(), &amount);
 
         let current_stake = get_provider_stake(&env, &provider);
         let new_stake = current_stake + amount;
-        env.storage().persistent().set(&DataKey::ProviderStake(provider.clone()), &new_stake);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProviderStake(provider.clone()), &new_stake);
 
         let new_total = get_total_capital(&env) + amount;
         let new_available = get_available_capital(&env) + amount;
-        env.storage().instance().set(&DataKey::TotalCapital, &new_total);
-        env.storage().instance().set(&DataKey::AvailableCapital, &new_available);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalCapital, &new_total);
+        env.storage()
+            .instance()
+            .set(&DataKey::AvailableCapital, &new_available);
+        refresh_state_root(&env);
 
         emit_event_with(
             &env,
@@ -124,7 +189,11 @@ impl RiskPoolContract {
         Ok(())
     }
 
-    pub fn withdraw_liquidity(env: Env, provider: Address, amount: i128) -> Result<(), RiskPoolError> {
+    pub fn withdraw_liquidity(
+        env: Env,
+        provider: Address,
+        amount: i128,
+    ) -> Result<(), RiskPoolError> {
         provider.require_auth();
 
         let stake = get_provider_stake(&env, &provider);
@@ -137,18 +206,28 @@ impl RiskPoolContract {
             return Err(RiskPoolError::InsufficientPoolFunds);
         }
 
-        let token: Address = env.storage().instance().get(&DataKey::Token)
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
             .ok_or(RiskPoolError::NotInitialized)?;
         let client = soroban_sdk::token::Client::new(&env, &token);
         client.transfer(&env.current_contract_address(), &provider, &amount);
 
         let new_stake = stake - amount;
-        env.storage().persistent().set(&DataKey::ProviderStake(provider.clone()), &new_stake);
-        
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProviderStake(provider.clone()), &new_stake);
+
         let new_total = get_total_capital(&env) - amount;
         let new_available = avail - amount;
-        env.storage().instance().set(&DataKey::TotalCapital, &new_total);
-        env.storage().instance().set(&DataKey::AvailableCapital, &new_available);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalCapital, &new_total);
+        env.storage()
+            .instance()
+            .set(&DataKey::AvailableCapital, &new_available);
+        refresh_state_root(&env);
 
         emit_event_with(
             &env,
@@ -169,16 +248,28 @@ impl RiskPoolContract {
             return Err(RiskPoolError::InsufficientPoolFunds);
         }
 
-        let token: Address = env.storage().instance().get(&DataKey::Token)
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
             .ok_or(RiskPoolError::NotInitialized)?;
         let client = soroban_sdk::token::Client::new(&env, &token);
         client.transfer(&env.current_contract_address(), &recipient, &amount);
 
         let new_available = avail - amount;
-        env.storage().instance().set(&DataKey::AvailableCapital, &new_available);
+        env.storage()
+            .instance()
+            .set(&DataKey::AvailableCapital, &new_available);
 
-        let paid = env.storage().instance().get(&DataKey::ClaimsPaid).unwrap_or(0);
-        env.storage().instance().set(&DataKey::ClaimsPaid, &(paid + amount));
+        let paid = env
+            .storage()
+            .instance()
+            .get(&DataKey::ClaimsPaid)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::ClaimsPaid, &(paid + amount));
+        refresh_state_root(&env);
 
         emit_event_with(
             &env,
@@ -215,10 +306,15 @@ impl RiskPoolContract {
         // Reduce the target's personal stake; the forfeited amount stays in the
         // pool as collectively-available capital.
         let new_stake = stake - amount;
-        env.storage().persistent().set(&DataKey::ProviderStake(target.clone()), &new_stake);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProviderStake(target.clone()), &new_stake);
 
         let new_available = get_available_capital(&env) + amount;
-        env.storage().instance().set(&DataKey::AvailableCapital, &new_available);
+        env.storage()
+            .instance()
+            .set(&DataKey::AvailableCapital, &new_available);
+        refresh_state_root(&env);
 
         emit_event_with(
             &env,
@@ -233,7 +329,11 @@ impl RiskPoolContract {
         PoolStats {
             total_capital: get_total_capital(&env),
             available_capital: get_available_capital(&env),
-            total_claims_paid: env.storage().instance().get(&DataKey::ClaimsPaid).unwrap_or(0),
+            total_claims_paid: env
+                .storage()
+                .instance()
+                .get(&DataKey::ClaimsPaid)
+                .unwrap_or(0),
         }
     }
 
@@ -241,7 +341,15 @@ impl RiskPoolContract {
         get_provider_stake(&env, &provider)
     }
 
-    pub fn migrate(env: Env, admin: Address, to_version: StorageVersion) -> Result<(), RiskPoolError> {
+    pub fn get_state_root(env: Env) -> soroban_sdk::BytesN<32> {
+        read_state_root(&env)
+    }
+
+    pub fn migrate(
+        env: Env,
+        admin: Address,
+        to_version: StorageVersion,
+    ) -> Result<(), RiskPoolError> {
         admin.require_auth();
         access_control::require_role(&env, &admin, &AccessControlRole::Admin);
 
@@ -264,14 +372,24 @@ impl RiskPoolContract {
             (StorageVersion::V1, StorageVersion::V2) => {
                 // Migration V1 -> V2: Add LockedCapital field with default value
                 if !env.storage().instance().has(&DataKey::LockedCapital) {
-                    env.storage().instance().set(&DataKey::LockedCapital, &0i128);
+                    env.storage()
+                        .instance()
+                        .set(&DataKey::LockedCapital, &0i128);
                 }
-                env.storage().instance().set(&DataKey::Version, &StorageVersion::V2);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::Version, &StorageVersion::V2);
+                refresh_state_root(&env);
             }
             _ => return Err(RiskPoolError::AlreadyInitialized),
         }
 
-        emit_event_with(&env, symbol_short!("RPOOL"), symbol_short!("MIGRATED"), &to_version);
+        emit_event_with(
+            &env,
+            symbol_short!("RPOOL"),
+            symbol_short!("MIGRATED"),
+            &to_version,
+        );
         Ok(())
     }
 }
@@ -297,7 +415,7 @@ impl RiskPoolContract {
 mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Env, Address};
+    use soroban_sdk::{Address, Env};
 
     fn setup() -> (Env, Address, Address) {
         let env = Env::default();
@@ -315,7 +433,11 @@ mod tests {
     fn test_initialize_sets_admin_role() {
         let (env, contract, admin) = setup();
         env.as_contract(&contract, || {
-            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
+            assert!(access_control::has_role(
+                &env,
+                &admin,
+                &AccessControlRole::Admin
+            ));
         });
     }
 }
@@ -328,7 +450,7 @@ mod tests {
 mod verification_tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Env, Address};
+    use soroban_sdk::{Address, Env};
 
     /// Kani harness: available_capital >= 0 is preserved after any state change.
     ///
@@ -369,7 +491,12 @@ mod verification_tests {
         kani::assume(withdrawal >= 0);
         kani::assume(withdrawal <= original + deposit);
         let final_total = original + deposit - withdrawal;
-        assert!(deposit_withdraw_roundtrip(original, deposit, withdrawal, final_total));
+        assert!(deposit_withdraw_roundtrip(
+            original,
+            deposit,
+            withdrawal,
+            final_total
+        ));
     }
 
     /// Property-based test: deposit followed by withdrawal round-trips correctly.
@@ -451,11 +578,15 @@ mod verification_tests {
             RiskPoolContract::deposit_liquidity(env.clone(), provider.clone(), 1000).unwrap();
         });
 
-        let stats = env.as_contract(&contract, || {
-            RiskPoolContract::get_pool_stats(env.clone())
-        });
-        assert!(stats.available_capital >= 0, "available_capital must be non-negative");
-        assert!(stats.total_capital >= stats.available_capital, "total_capital must cover available_capital");
+        let stats = env.as_contract(&contract, || RiskPoolContract::get_pool_stats(env.clone()));
+        assert!(
+            stats.available_capital >= 0,
+            "available_capital must be non-negative"
+        );
+        assert!(
+            stats.total_capital >= stats.available_capital,
+            "total_capital must cover available_capital"
+        );
         assert_eq!(stats.total_capital, 1000);
 
         // Withdraw part of the liquidity
@@ -463,9 +594,7 @@ mod verification_tests {
             RiskPoolContract::withdraw_liquidity(env.clone(), provider.clone(), 400).unwrap();
         });
 
-        let stats = env.as_contract(&contract, || {
-            RiskPoolContract::get_pool_stats(env.clone())
-        });
+        let stats = env.as_contract(&contract, || RiskPoolContract::get_pool_stats(env.clone()));
         assert!(stats.available_capital >= 0);
         assert!(stats.total_capital >= stats.available_capital);
         assert_eq!(stats.total_capital, 600);

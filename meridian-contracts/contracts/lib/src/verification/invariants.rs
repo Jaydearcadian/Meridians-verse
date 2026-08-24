@@ -61,7 +61,11 @@ pub fn monotonic_counter(old_value: Count, new_value: Count) -> bool {
 /// - claims: `submit_claim` validation
 /// - policy: `update_claimed` guard
 #[inline]
-pub fn claim_within_coverage(total_claimed: Amount, claim_amount: Amount, coverage: Amount) -> bool {
+pub fn claim_within_coverage(
+    total_claimed: Amount,
+    claim_amount: Amount,
+    coverage: Amount,
+) -> bool {
     claim_amount > 0 && total_claimed + claim_amount <= coverage
 }
 
@@ -126,7 +130,11 @@ pub fn deposit_withdraw_roundtrip(
 /// # Contract coverage
 /// - governance: `Proposal.yes_votes + no_votes == total_weight`
 #[inline]
-pub fn vote_sum_equals_total_weight(yes_votes: Weight, no_votes: Weight, total_weight: Weight) -> bool {
+pub fn vote_sum_equals_total_weight(
+    yes_votes: Weight,
+    no_votes: Weight,
+    total_weight: Weight,
+) -> bool {
     yes_votes + no_votes == total_weight
 }
 

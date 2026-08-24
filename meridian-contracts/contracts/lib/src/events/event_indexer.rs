@@ -6,8 +6,8 @@
 //! entire event history of the contract, which off-chain indexers and the
 //! Merkle proof pipeline can use to prove inclusion of any individual event.
 
-use soroban_sdk::{Bytes, BytesN, Env, Symbol};
 use soroban_sdk::xdr::ToXdr;
+use soroban_sdk::{Bytes, BytesN, Env, Symbol};
 
 use super::EventSchema;
 

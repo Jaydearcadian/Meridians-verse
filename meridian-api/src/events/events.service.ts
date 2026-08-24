@@ -17,6 +17,7 @@ export interface ContractEvent {
   blockNumber: number;
   data?: Record<string, unknown>;
   address?: string;
+  stateRoot?: string;
 }
 
 export interface MerkleProofResult {
@@ -107,6 +108,7 @@ export class EventsService implements OnModuleInit {
             participantAddress: contribution.address,
             contributionXp: contribution.xp,
             epochNumber,
+            stateRoot: event.stateRoot ?? this.readStateRoot(event.data),
           });
 
           await this.deliverWebhooks(event, auditEntry);
@@ -284,7 +286,7 @@ export class EventsService implements OnModuleInit {
     return { valid: true, entries: entries.length };
   }
 
-  async buildMerkleProof(index: number, entries: Array<Pick<AuditLog, 'chainHash'>> = []): Promise<MerkleProofResult | null> {
+  async buildMerkleProof(index: number, entries: Array<Pick<AuditLog, 'chainHash'> & Partial<Pick<AuditLog, 'stateRoot'>>> = []): Promise<MerkleProofResult | null> {
     const leaves = entries
       .filter((entry) => Boolean(entry.chainHash))
       .map((entry) => entry.chainHash as string);
@@ -319,13 +321,21 @@ export class EventsService implements OnModuleInit {
       currentLevel = nextLevel;
     }
 
+    const computedRoot = currentLevel[0] ?? '';
+    const anchoredRoot = entries[index]?.stateRoot ?? entries[0]?.stateRoot ?? null;
+
     return {
       leaf,
       proof,
-      root: currentLevel[0] ?? '',
-      verified: true,
+      root: anchoredRoot ?? computedRoot,
+      verified: anchoredRoot == null || anchoredRoot === computedRoot,
       leafIndex: index,
     };
+  }
+
+  private readStateRoot(data?: Record<string, unknown>): string | null {
+    const value = data?.stateRoot ?? data?.state_root;
+    return typeof value === 'string' ? value : null;
   }
 
   verifyMerkleProof(leaf: string, proof: string[], root: string): boolean {

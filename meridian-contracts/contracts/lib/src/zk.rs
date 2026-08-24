@@ -134,9 +134,7 @@ fn limbs_sub(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
 /// length window. Actual structural validation is performed by arkworks during
 /// deserialization on-chain.
 pub fn validate_proof_payload(payload: &[u8]) -> bool {
-    !payload.is_empty()
-        && payload.len() >= MIN_PROOF_LEN
-        && payload.len() <= MAX_PROOF_LEN
+    !payload.is_empty() && payload.len() >= MIN_PROOF_LEN && payload.len() <= MAX_PROOF_LEN
 }
 
 /// Returns `true` when the public-input set is well-formed: non-empty, bounded

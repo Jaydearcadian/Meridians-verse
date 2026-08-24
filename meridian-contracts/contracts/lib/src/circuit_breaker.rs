@@ -100,7 +100,10 @@ impl CircuitBreaker {
             .checked_add(duration_seconds)
             .ok_or(CircuitBreakerError::TimestampOverflow)?;
         let pause_until = if currently_paused {
-            core::cmp::max(state.pause_until.unwrap_or(requested_until), requested_until)
+            core::cmp::max(
+                state.pause_until.unwrap_or(requested_until),
+                requested_until,
+            )
         } else {
             requested_until
         };
@@ -338,7 +341,9 @@ impl InkCircuitBreaker {
 
 #[cfg(feature = "soroban")]
 mod soroban_impl {
-    use super::{CircuitBreaker, CircuitBreakerError, CircuitBreakerState, CircuitBreakerTransition};
+    use super::{
+        CircuitBreaker, CircuitBreakerError, CircuitBreakerState, CircuitBreakerTransition,
+    };
     use crate::access_control::{self, AccessControlRole};
     use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, Vec};
 
@@ -411,16 +416,13 @@ mod soroban_impl {
         admin.require_auth();
         access_control::require_role(env, admin, &AccessControlRole::Admin);
         let mut state = load(env).into_state();
-        let transition = CircuitBreaker::resume(
-            &mut state,
-            env.ledger().timestamp(),
-            admin.clone(),
-        )
-        .unwrap_or_else(|error| match error {
-            CircuitBreakerError::NotPaused => panic!("contract not paused"),
-            CircuitBreakerError::ResumeTimelockActive => panic!("resume timelock active"),
-            _ => panic!("invalid circuit breaker state"),
-        });
+        let transition =
+            CircuitBreaker::resume(&mut state, env.ledger().timestamp(), admin.clone())
+                .unwrap_or_else(|error| match error {
+                    CircuitBreakerError::NotPaused => panic!("contract not paused"),
+                    CircuitBreakerError::ResumeTimelockActive => panic!("resume timelock active"),
+                    _ => panic!("invalid circuit breaker state"),
+                });
         save(env, StoredCircuitBreakerState::from_state(state));
         emit(env, transition);
     }
@@ -469,7 +471,9 @@ mod soroban_impl {
     }
 
     fn save(env: &Env, state: StoredCircuitBreakerState) {
-        env.storage().instance().set(&CircuitBreakerKey::State, &state);
+        env.storage()
+            .instance()
+            .set(&CircuitBreakerKey::State, &state);
     }
 
     fn emit(env: &Env, transition: CircuitBreakerTransition<Address>) {
@@ -482,26 +486,38 @@ mod soroban_impl {
                 rescheduled_by,
             } => env.events().publish(
                 (symbol_short!("CBREAK"), Symbol::new(env, "PauseScheduled")),
-                (scheduled_by, scheduled_at, activates_at, pause_until, rescheduled_by),
+                (
+                    scheduled_by,
+                    scheduled_at,
+                    activates_at,
+                    pause_until,
+                    rescheduled_by,
+                ),
             ),
-            CircuitBreakerTransition::PauseActivated { activated_at, pause_until, emergency } => {
-                env.events().publish(
-                    (symbol_short!("CBREAK"), Symbol::new(env, "PauseActivated")),
-                    (activated_at, pause_until, emergency),
-                )
-            }
-            CircuitBreakerTransition::ResumeScheduled { scheduled_by, scheduled_at, activates_at } => {
-                env.events().publish(
-                    (symbol_short!("CBREAK"), Symbol::new(env, "ResumeScheduled")),
-                    (scheduled_by, scheduled_at, activates_at),
-                )
-            }
-            CircuitBreakerTransition::ResumeActivated { activated_by, activated_at, automatic } => {
-                env.events().publish(
-                    (symbol_short!("CBREAK"), Symbol::new(env, "ResumeActivated")),
-                    (activated_by, activated_at, automatic),
-                )
-            }
+            CircuitBreakerTransition::PauseActivated {
+                activated_at,
+                pause_until,
+                emergency,
+            } => env.events().publish(
+                (symbol_short!("CBREAK"), Symbol::new(env, "PauseActivated")),
+                (activated_at, pause_until, emergency),
+            ),
+            CircuitBreakerTransition::ResumeScheduled {
+                scheduled_by,
+                scheduled_at,
+                activates_at,
+            } => env.events().publish(
+                (symbol_short!("CBREAK"), Symbol::new(env, "ResumeScheduled")),
+                (scheduled_by, scheduled_at, activates_at),
+            ),
+            CircuitBreakerTransition::ResumeActivated {
+                activated_by,
+                activated_at,
+                automatic,
+            } => env.events().publish(
+                (symbol_short!("CBREAK"), Symbol::new(env, "ResumeActivated")),
+                (activated_by, activated_at, automatic),
+            ),
         }
     }
 
@@ -543,9 +559,18 @@ mod tests {
     fn pause_has_distinct_scheduled_active_and_expired_boundaries() {
         let mut state = CircuitBreakerState::default();
         CircuitBreaker::pause(&mut state, 10, 100, 1u8).unwrap();
-        assert!(!CircuitBreaker::is_paused(&state, 10 + PAUSE_TIMELOCK_SECONDS - 1));
-        assert!(CircuitBreaker::is_paused(&state, 10 + PAUSE_TIMELOCK_SECONDS));
-        assert!(!CircuitBreaker::is_paused(&state, 10 + PAUSE_TIMELOCK_SECONDS + 100));
+        assert!(!CircuitBreaker::is_paused(
+            &state,
+            10 + PAUSE_TIMELOCK_SECONDS - 1
+        ));
+        assert!(CircuitBreaker::is_paused(
+            &state,
+            10 + PAUSE_TIMELOCK_SECONDS
+        ));
+        assert!(!CircuitBreaker::is_paused(
+            &state,
+            10 + PAUSE_TIMELOCK_SECONDS + 100
+        ));
     }
 
     #[test]

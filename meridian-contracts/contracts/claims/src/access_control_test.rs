@@ -2,7 +2,7 @@
 mod access_control_tests {
     use crate::ClaimsContract;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Env, Address};
+    use soroban_sdk::{Address, Env};
     use stellar_insured_lib::access_control::{self, AccessControlRole};
 
     fn setup() -> (Env, Address, Address, Address, Address) {
@@ -22,9 +22,21 @@ mod access_control_tests {
             ClaimsContract::initialize(env.clone(), admin.clone(), policy, risk);
         });
         env.as_contract(&contract, || {
-            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
-            assert!(!access_control::has_role(&env, &admin, &AccessControlRole::Claims));
-            assert!(!access_control::has_role(&env, &admin, &AccessControlRole::Governance));
+            assert!(access_control::has_role(
+                &env,
+                &admin,
+                &AccessControlRole::Admin
+            ));
+            assert!(!access_control::has_role(
+                &env,
+                &admin,
+                &AccessControlRole::Claims
+            ));
+            assert!(!access_control::has_role(
+                &env,
+                &admin,
+                &AccessControlRole::Governance
+            ));
         });
     }
 
@@ -37,7 +49,11 @@ mod access_control_tests {
             ClaimsContract::set_role(env.clone(), claims_addr.clone(), AccessControlRole::Claims);
         });
         env.as_contract(&contract, || {
-            assert!(access_control::has_role(&env, &claims_addr, &AccessControlRole::Claims));
+            assert!(access_control::has_role(
+                &env,
+                &claims_addr,
+                &AccessControlRole::Claims
+            ));
         });
     }
 
@@ -115,12 +131,20 @@ mod access_control_tests {
         env.as_contract(&contract, || {
             ClaimsContract::initialize(env.clone(), admin.clone(), policy, risk);
             ClaimsContract::set_role(env.clone(), claims_addr.clone(), AccessControlRole::Claims);
-            assert!(access_control::has_role(&env, &claims_addr, &AccessControlRole::Claims));
+            assert!(access_control::has_role(
+                &env,
+                &claims_addr,
+                &AccessControlRole::Claims
+            ));
         });
 
         env.as_contract(&contract, || {
             access_control::revoke_role(&env, &admin, &claims_addr, AccessControlRole::Claims);
-            assert!(!access_control::has_role(&env, &claims_addr, &AccessControlRole::Claims));
+            assert!(!access_control::has_role(
+                &env,
+                &claims_addr,
+                &AccessControlRole::Claims
+            ));
         });
     }
 
@@ -148,7 +172,11 @@ mod access_control_tests {
         });
 
         env.as_contract(&contract, || {
-            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
+            assert!(access_control::has_role(
+                &env,
+                &admin,
+                &AccessControlRole::Admin
+            ));
         });
     }
 
@@ -167,11 +195,16 @@ mod access_control_tests {
         });
 
         env.as_contract(&contract, || {
-            AdvancedEscrow::set_role(env.clone(), new_admin.clone(), AccessControlRole::Admin).unwrap();
+            AdvancedEscrow::set_role(env.clone(), new_admin.clone(), AccessControlRole::Admin)
+                .unwrap();
         });
 
         env.as_contract(&contract, || {
-            assert!(access_control::has_role(&env, &new_admin, &AccessControlRole::Admin));
+            assert!(access_control::has_role(
+                &env,
+                &new_admin,
+                &AccessControlRole::Admin
+            ));
         });
     }
 
@@ -190,7 +223,11 @@ mod access_control_tests {
         });
 
         env.as_contract(&contract, || {
-            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
+            assert!(access_control::has_role(
+                &env,
+                &admin,
+                &AccessControlRole::Admin
+            ));
         });
     }
 
@@ -233,11 +270,16 @@ mod access_control_tests {
                 claims,
                 risk_pool,
                 policy,
-            ).unwrap();
+            )
+            .unwrap();
         });
 
         env.as_contract(&contract, || {
-            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
+            assert!(access_control::has_role(
+                &env,
+                &admin,
+                &AccessControlRole::Admin
+            ));
         });
     }
 
@@ -257,7 +299,11 @@ mod access_control_tests {
         });
 
         env.as_contract(&contract, || {
-            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
+            assert!(access_control::has_role(
+                &env,
+                &admin,
+                &AccessControlRole::Admin
+            ));
         });
     }
 }

@@ -11,6 +11,7 @@
 
 use ink::prelude::*;
 use ink::storage::Mapping;
+mod state_root;
 use propchain_traits::*;
 use stellar_insured_lib::circuit_breaker::{
     CircuitBreakerTransition, InkCircuitBreaker,
@@ -737,6 +738,11 @@ mod propchain_oracle {
         #[ink(message)]
         pub fn get_ai_valuation_contract(&self) -> Option<AccountId> {
             self.ai_valuation_contract
+        }
+
+        #[ink(message)]
+        pub fn get_state_root(&self) -> crate::state_root::StateRoot {
+            crate::state_root::compute_root(&vec![self.admin.encode(), self.request_id_counter.encode()])
         }
 
         /// Set the ZK compliance contract used to verify attestations (admin only)

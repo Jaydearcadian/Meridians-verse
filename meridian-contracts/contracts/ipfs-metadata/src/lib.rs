@@ -7,6 +7,8 @@
 use ink::prelude::string::String;
 use ink::prelude::vec::Vec;
 use ink::storage::Mapping;
+use scale::Encode;
+mod state_root;
 
 mod validation;
 
@@ -929,6 +931,11 @@ mod ipfs_metadata {
         #[ink(message)]
         pub fn document_count(&self) -> u64 {
             self.document_count
+        }
+
+        #[ink(message)]
+        pub fn get_state_root(&self) -> crate::state_root::StateRoot {
+            crate::state_root::compute_root(&vec![self.admin.encode(), self.document_count.encode()])
         }
     }
 

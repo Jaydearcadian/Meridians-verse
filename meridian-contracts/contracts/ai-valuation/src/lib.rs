@@ -10,6 +10,7 @@ mod tests;
 use ink::prelude::vec::Vec;
 use ink::prelude::string::String;
 use ink::storage::Mapping;
+mod state_root;
 use ink::env::Environment;
 use propchain_traits::*;
 use stellar_insured_lib::circuit_breaker::{
@@ -682,6 +683,11 @@ mod ai_valuation {
         #[ink(message)]
         pub fn get_training_data_count(&self) -> u64 {
             self.training_data.len() as u64
+        }
+
+        #[ink(message)]
+        pub fn get_state_root(&self) -> crate::state_root::StateRoot {
+            crate::state_root::compute_root(&vec![self.admin.encode(), self.training_data.len().encode()])
         }
 
         /// Create ML pipeline for model training

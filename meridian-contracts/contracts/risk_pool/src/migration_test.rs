@@ -2,7 +2,7 @@
 mod migration_tests {
     use crate::{RiskPoolContract, StorageVersion};
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Env, Address};
+    use soroban_sdk::{Address, Env};
 
     fn setup() -> (Env, Address, Address) {
         let env = Env::default();

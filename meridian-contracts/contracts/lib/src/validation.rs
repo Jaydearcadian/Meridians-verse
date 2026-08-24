@@ -53,11 +53,7 @@ pub fn validate_string_length(value: &str, min: u32, max: u32) -> Result<(), Val
 }
 
 #[cfg(feature = "soroban")]
-pub fn validate_string_length(
-    value: &String,
-    min: u32,
-    max: u32,
-) -> Result<(), ValidationError> {
+pub fn validate_string_length(value: &String, min: u32, max: u32) -> Result<(), ValidationError> {
     let length = value.len();
     if min > max || length < min || length > max {
         Err(ValidationError::InvalidStringLength)
@@ -89,9 +85,18 @@ mod tests {
     #[test]
     fn rejects_invalid_boundaries_with_specific_errors() {
         assert_eq!(validate_amount(0), Err(ValidationError::NonPositiveAmount));
-        assert_eq!(validate_timestamp(10, 10), Err(ValidationError::InvalidTimestamp));
-        assert_eq!(validate_enum_range(4, 0, 3), Err(ValidationError::InvalidEnumRange));
-        assert_eq!(validate_cross_field(false), Err(ValidationError::CrossFieldConstraint));
+        assert_eq!(
+            validate_timestamp(10, 10),
+            Err(ValidationError::InvalidTimestamp)
+        );
+        assert_eq!(
+            validate_enum_range(4, 0, 3),
+            Err(ValidationError::InvalidEnumRange)
+        );
+        assert_eq!(
+            validate_cross_field(false),
+            Err(ValidationError::CrossFieldConstraint)
+        );
     }
 }
 

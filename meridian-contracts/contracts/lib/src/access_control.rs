@@ -70,10 +70,7 @@ fn grant_role(env: &Env, addr: &Address, role: AccessControlRole) {
     let already = env
         .storage()
         .instance()
-        .get::<AccessControlKey, bool>(&AccessControlKey::RoleMap(
-            addr.clone(),
-            role.clone(),
-        ))
+        .get::<AccessControlKey, bool>(&AccessControlKey::RoleMap(addr.clone(), role.clone()))
         .unwrap_or(false);
     if already {
         return;
@@ -82,8 +79,7 @@ fn grant_role(env: &Env, addr: &Address, role: AccessControlRole) {
         &AccessControlKey::RoleMap(addr.clone(), role.clone()),
         &true,
     );
-    env.events()
-        .publish((ROLE_GRANTED,), (addr.clone(), role));
+    env.events().publish((ROLE_GRANTED,), (addr.clone(), role));
 }
 
 /// Revoke `role` from `addr`.  Only callable by ADMIN.
@@ -99,17 +95,13 @@ pub fn revoke_role(env: &Env, _caller: &Address, addr: &Address, role: AccessCon
         &AccessControlKey::RoleMap(addr.clone(), role.clone()),
         &false,
     );
-    env.events()
-        .publish((ROLE_REVOKED,), (addr.clone(), role));
+    env.events().publish((ROLE_REVOKED,), (addr.clone(), role));
 }
 
 /// Check whether `addr` holds `role` (non-panicking).
 pub fn has_role(env: &Env, addr: &Address, role: &AccessControlRole) -> bool {
     env.storage()
         .instance()
-        .get::<AccessControlKey, bool>(&AccessControlKey::RoleMap(
-            addr.clone(),
-            role.clone(),
-        ))
+        .get::<AccessControlKey, bool>(&AccessControlKey::RoleMap(addr.clone(), role.clone()))
         .unwrap_or(false)
 }

@@ -9,8 +9,10 @@ use ink::prelude::vec::Vec;
 use ink::storage::Mapping;
 use propchain_traits::DynamicFeeProvider;
 use propchain_traits::FeeOperation;
+use scale::Encode;
 
 mod validation;
+mod state_root;
 
 /// Dynamic Fee and Market Mechanism contract for PropChain.
 /// Implements congestion-based fees, premium listing auctions, validator incentives,
@@ -573,6 +575,11 @@ mod propchain_fees {
         #[ink(message)]
         pub fn get_auction_count(&self) -> u64 {
             self.auction_count
+        }
+
+        #[ink(message)]
+        pub fn get_state_root(&self) -> crate::state_root::StateRoot {
+            crate::state_root::compute_root(&vec![self.auction_count.encode(), self.total_fees_collected.encode()])
         }
 
         // ========== Incentives and distribution ==========

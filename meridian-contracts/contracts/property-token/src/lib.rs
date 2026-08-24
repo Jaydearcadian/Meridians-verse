@@ -14,12 +14,14 @@ use ink::prelude::{
 };
 use ink::prelude::string::String;
 use ink::storage::Mapping;
+use scale::Encode;
 use propchain_traits::*;
 use stellar_insured_lib::circuit_breaker::{
     CircuitBreakerTransition, InkCircuitBreaker,
 };
 
 mod validation;
+mod state_root;
 
 #[ink::contract]
 mod property_token {
@@ -2298,6 +2300,11 @@ mod property_token {
         #[ink(message)]
         pub fn get_bridge_operators(&self) -> Vec<AccountId> {
             self.bridge_operators.clone()
+        }
+
+        #[ink(message)]
+        pub fn get_state_root(&self) -> crate::state_root::StateRoot {
+            crate::state_root::compute_root(&vec![self.admin.encode(), self.total_supply.encode(), self.token_counter.encode()])
         }
 
         /// Updates bridge configuration (admin only)

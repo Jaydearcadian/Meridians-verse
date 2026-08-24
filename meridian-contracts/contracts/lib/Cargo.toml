@@ -26,7 +26,6 @@ optional = true
 [features]
 default = ["std", "soroban"]
 std = [
-    "soroban-sdk?/std",
     "ink?/std",
     "scale?/std",
     "scale-info?/std",
