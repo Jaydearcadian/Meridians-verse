@@ -28,6 +28,14 @@ from typing import Iterable, Sequence
 ZERO_HASH = "0x" + ("00" * 32)
 
 
+def compute_state_root(entry_hashes: Sequence[str]) -> str:
+    """Compute the anchored hash chain for verified error entries."""
+    root = bytes(32)
+    for value in entry_hashes:
+        root = hashlib.blake2b(root + decode_hex_32(value, "entry_hash"), digest_size=32).digest()
+    return "0x" + root.hex()
+
+
 def compact_encode(value: int) -> bytes:
     if value < 0:
         raise ValueError("compact integers must be non-negative")
@@ -100,6 +108,7 @@ def compute_entry_hash(entry: dict) -> str:
 
 
 def verify_entries(entries: Iterable[dict]) -> bool:
+    entries = list(entries)
     previous_hash = ZERO_HASH
 
     for index, entry in enumerate(entries):
@@ -122,6 +131,15 @@ def verify_entries(entries: Iterable[dict]) -> bool:
 
         previous_hash = actual_hash
 
+    anchored = bytes(32)
+    for index, entry in enumerate(entries):
+        anchored = hashlib.blake2b(
+            anchored + decode_hex_32(entry["entry_hash"], "entry_hash"), digest_size=32
+        ).digest()
+        if entry.get("state_root") and normalize_hash(entry["state_root"]) != "0x" + anchored.hex():
+            print(f"state root mismatch at index {index}", file=sys.stderr)
+            return False
+
     return True
 
 
@@ -143,6 +161,13 @@ def make_self_test_entries() -> list[dict]:
         entry["entry_hash"] = compute_entry_hash(entry)
         previous_hash = entry["entry_hash"]
         entries.append(entry)
+
+    root = bytes(32)
+    for entry in entries:
+        root = hashlib.blake2b(
+            root + decode_hex_32(entry["entry_hash"], "entry_hash"), digest_size=32
+        ).digest()
+        entry["state_root"] = "0x" + root.hex()
 
     return entries
 

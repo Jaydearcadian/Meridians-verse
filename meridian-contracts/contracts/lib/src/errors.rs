@@ -1,7 +1,7 @@
 #![no_std]
 
 //! Strongly-typed error enums for Soroban smart contracts
-//! 
+//!
 //! This module provides gas-efficient, auditable error handling using
 //! Soroban's #[contracterror] attribute, replacing raw panic! calls
 //! with structured error codes that surface properly to SDK/API clients.
@@ -92,7 +92,7 @@ pub enum GovernanceError {
 }
 
 /// Oracle contract errors (Soroban version)
-/// 
+///
 /// Note: For ink! contracts, use the OracleError enum in the traits crate
 #[cfg(feature = "soroban")]
 #[contracterror]

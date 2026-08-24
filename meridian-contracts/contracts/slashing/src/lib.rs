@@ -1,9 +1,12 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, Symbol};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol, Vec,
+};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 use stellar_insured_lib::circuit_breaker;
 use stellar_insured_lib::events::emit_event_with;
+use stellar_insured_lib::state_root::get_state_root;
 
 // Maximum slashing history entries per (target, role) to prevent storage bloat (#380)
 const MAX_HISTORY: u32 = 50;
@@ -45,19 +48,30 @@ fn is_paused(env: &Env) -> bool {
 }
 
 fn get_slashable_roles(env: &Env) -> Vec<Symbol> {
-    env.storage().instance().get(&DataKey::SlashableRoles).unwrap_or(Vec::new(env))
+    env.storage()
+        .instance()
+        .get(&DataKey::SlashableRoles)
+        .unwrap_or(Vec::new(env))
 }
 
 fn get_violation_count_inner(env: &Env, target: &Address, role: &Symbol) -> u32 {
-    env.storage().persistent().get(&DataKey::ViolationCount(target.clone(), role.clone())).unwrap_or(0)
+    env.storage()
+        .persistent()
+        .get(&DataKey::ViolationCount(target.clone(), role.clone()))
+        .unwrap_or(0)
 }
 
 fn get_history_inner(env: &Env, target: &Address, role: &Symbol) -> Vec<SlashingRecord> {
-    env.storage().persistent().get(&DataKey::History(target.clone(), role.clone())).unwrap_or(Vec::new(env))
+    env.storage()
+        .persistent()
+        .get(&DataKey::History(target.clone(), role.clone()))
+        .unwrap_or(Vec::new(env))
 }
 
 fn set_history(env: &Env, target: &Address, role: &Symbol, history: &Vec<SlashingRecord>) {
-    env.storage().persistent().set(&DataKey::History(target.clone(), role.clone()), history);
+    env.storage()
+        .persistent()
+        .set(&DataKey::History(target.clone(), role.clone()), history);
 }
 
 // --------------------------------------------------------
@@ -72,16 +86,15 @@ impl SlashingContract {
             panic!("Already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::Governance, &governance);
+        env.storage()
+            .instance()
+            .set(&DataKey::Governance, &governance);
         env.storage().instance().set(&DataKey::RiskPool, &risk_pool);
-        env.storage().instance().set(&DataKey::SlashableRoles, &Vec::<Symbol>::new(&env));
+        env.storage()
+            .instance()
+            .set(&DataKey::SlashableRoles, &Vec::<Symbol>::new(&env));
         access_control::init_access_control(&env, &admin);
-        access_control::set_role(
-            &env,
-            &admin,
-            &governance,
-            AccessControlRole::Governance,
-        );
+        access_control::set_role(&env, &admin, &governance, AccessControlRole::Governance);
         circuit_breaker::init(&env);
 
         emit_event_with(
@@ -100,7 +113,9 @@ impl SlashingContract {
         let caller = env.current_contract_address();
         access_control::require_role(&env, &caller, &AccessControlRole::Admin);
 
-        env.storage().persistent().set(&DataKey::PenaltyParams(role.clone()), &params);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PenaltyParams(role.clone()), &params);
 
         emit_event_with(
             &env,
@@ -109,7 +124,12 @@ impl SlashingContract {
             &(role.clone(), params.percentage, params.multiplier),
         );
 
-        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("CFG_PEN"), &role);
+        emit_event_with(
+            &env,
+            symbol_short!("SLASH"),
+            symbol_short!("CFG_PEN"),
+            &role,
+        );
     }
 
     pub fn slash_funds(env: Env, target: Address, role: Symbol, reason: String, amount: i128) {
@@ -126,7 +146,10 @@ impl SlashingContract {
 
         let mut count = get_violation_count_inner(&env, &target, &role);
         count += 1;
-        env.storage().persistent().set(&DataKey::ViolationCount(target.clone(), role.clone()), &count);
+        env.storage().persistent().set(
+            &DataKey::ViolationCount(target.clone(), role.clone()),
+            &count,
+        );
 
         let record = SlashingRecord {
             target: target.clone(),
@@ -164,12 +187,24 @@ impl SlashingContract {
         let mut roles = get_slashable_roles(&env);
         if !roles.contains(role.clone()) {
             roles.push_back(role.clone());
-            env.storage().instance().set(&DataKey::SlashableRoles, &roles);
+            env.storage()
+                .instance()
+                .set(&DataKey::SlashableRoles, &roles);
 
-            emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("ROLE_ADD"), &role.clone());
+            emit_event_with(
+                &env,
+                symbol_short!("SLASH"),
+                symbol_short!("ROLE_ADD"),
+                &role.clone(),
+            );
         }
 
-        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("ROLE_ADD"), &role);
+        emit_event_with(
+            &env,
+            symbol_short!("SLASH"),
+            symbol_short!("ROLE_ADD"),
+            &role,
+        );
     }
 
     pub fn remove_slashable_role(env: Env, role: Symbol) {
@@ -183,11 +218,23 @@ impl SlashingContract {
                 new_roles.push_back(r);
             }
         }
-        env.storage().instance().set(&DataKey::SlashableRoles, &new_roles);
+        env.storage()
+            .instance()
+            .set(&DataKey::SlashableRoles, &new_roles);
 
-        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("ROLE_RM"), &role.clone());
+        emit_event_with(
+            &env,
+            symbol_short!("SLASH"),
+            symbol_short!("ROLE_RM"),
+            &role.clone(),
+        );
 
-        emit_event_with(&env, symbol_short!("SLASH"), symbol_short!("ROLE_RM"), &role);
+        emit_event_with(
+            &env,
+            symbol_short!("SLASH"),
+            symbol_short!("ROLE_RM"),
+            &role,
+        );
     }
 
     pub fn pause(env: Env, governance: Address, duration_seconds: u64) {
@@ -213,6 +260,10 @@ impl SlashingContract {
         get_history_inner(&env, &target, &role)
     }
 
+    pub fn get_state_root(env: Env) -> soroban_sdk::BytesN<32> {
+        get_state_root(&env)
+    }
+
     pub fn get_violation_count(env: Env, target: Address, role: Symbol) -> u32 {
         get_violation_count_inner(&env, &target, &role)
     }
@@ -223,7 +274,11 @@ impl SlashingContract {
             return false;
         }
 
-        if let Some(params) = env.storage().persistent().get::<DataKey, PenaltyParams>(&DataKey::PenaltyParams(role.clone())) {
+        if let Some(params) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, PenaltyParams>(&DataKey::PenaltyParams(role.clone()))
+        {
             let history = get_history_inner(&env, &target, &role);
             if let Some(last) = history.last() {
                 if env.ledger().timestamp() < last.timestamp + params.cooldown_seconds {
@@ -240,7 +295,7 @@ impl SlashingContract {
 mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Env, Address};
+    use soroban_sdk::{Address, Env};
 
     fn setup() -> (Env, Address, Address, Address) {
         let env = Env::default();
@@ -259,8 +314,16 @@ mod tests {
     fn test_initialize_sets_roles() {
         let (env, contract, admin, governance) = setup();
         env.as_contract(&contract, || {
-            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
-            assert!(access_control::has_role(&env, &governance, &AccessControlRole::Governance));
+            assert!(access_control::has_role(
+                &env,
+                &admin,
+                &AccessControlRole::Admin
+            ));
+            assert!(access_control::has_role(
+                &env,
+                &governance,
+                &AccessControlRole::Governance
+            ));
         });
     }
 

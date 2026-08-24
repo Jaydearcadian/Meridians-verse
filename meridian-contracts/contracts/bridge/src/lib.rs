@@ -3,10 +3,12 @@
 mod storage;
 mod types;
 mod validation;
+mod state_root;
 
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Bytes, Env, String, Vec};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 use stellar_insured_lib::circuit_breaker;
+use stellar_insured_lib::state_root::get_state_root;
 
 use storage::{DataKey, MAX_HISTORY_ITEMS};
 use types::{
@@ -432,6 +434,10 @@ impl PropertyBridge {
             .instance()
             .get(&DataKey::Version)
             .unwrap_or(CONTRACT_VERSION)
+    }
+
+    pub fn get_state_root(env: Env) -> soroban_sdk::BytesN<32> {
+        get_state_root(&env)
     }
 
     pub fn get_config(env: Env) -> BridgeConfig {

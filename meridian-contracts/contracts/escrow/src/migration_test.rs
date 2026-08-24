@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod migration_tests {
-    use crate::AdvancedEscrow;
     use crate::storage::{DataKey, StorageVersion};
+    use crate::AdvancedEscrow;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::{Address, Env};
 
@@ -9,12 +9,12 @@ mod migration_tests {
         let env = Env::default();
         let contract_id = env.register_contract(None, AdvancedEscrow);
         let admin = Address::generate(&env);
-        
+
         env.as_contract(&contract_id, || {
             env.mock_all_auths();
             AdvancedEscrow::init(env.clone(), admin.clone()).unwrap();
         });
-        
+
         (env, admin, contract_id)
     }
 
@@ -119,7 +119,7 @@ mod migration_tests {
         // Create an escrow before migration
         let buyer = Address::generate(&env);
         let seller = Address::generate(&env);
-        
+
         env.mock_all_auths();
         let escrow_id = env.as_contract(&contract_id, || {
             AdvancedEscrow::create_escrow_advanced(

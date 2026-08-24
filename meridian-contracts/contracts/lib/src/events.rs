@@ -12,15 +12,16 @@
 //! [`event_indexer::get_events_root`]. That 32-byte root is a single
 //! commitment over every emitted event, enabling Merkle-style inclusion proofs.
 
-use soroban_sdk::{contracttype, Bytes, BytesN, Env, Symbol};
+use crate::state_root::{compute_root, get_state_root, set_state_root};
 use soroban_sdk::xdr::ToXdr;
+use soroban_sdk::{contracttype, Bytes, BytesN, Env, Symbol};
 
 pub mod event_indexer;
 pub use event_indexer::{get_events_root, hash_event, record_event};
 
 /// Current version of the canonical event schema. Bump whenever the schema
 /// shape changes so indexers can branch on compatibility.
-pub const EVENT_SCHEMA_VERSION: u32 = 1;
+pub const EVENT_SCHEMA_VERSION: u32 = 2;
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,6 +62,8 @@ pub struct EventSchema {
     pub payload: Bytes,
     /// Schema version for forward/backward compatibility.
     pub version: u32,
+    /// State commitment after this transition.
+    pub state_root: BytesN<32>,
 }
 
 /// Emit a canonical, indexed event from a pre-built payload.
@@ -68,6 +71,12 @@ pub struct EventSchema {
 /// Publishes `(contract, action)` topics with the full [`EventSchema`] as data,
 /// then folds the event hash into the on-chain events accumulator.
 pub fn emit_event(env: &Env, contract: Symbol, action: Symbol, payload: Bytes) -> EventSchema {
+    let mut root_entries = soroban_sdk::Vec::new(env);
+    root_entries.push_back(get_state_root(env));
+    root_entries.push_back(payload.clone());
+    let next_root = compute_root(env, root_entries);
+    set_state_root(env, &next_root);
+
     let schema = EventSchema {
         contract: contract.clone(),
         action: action.clone(),
@@ -78,9 +87,12 @@ pub fn emit_event(env: &Env, contract: Symbol, action: Symbol, payload: Bytes) -
         tx_hash: BytesN::from_array(env, &[0u8; 32]),
         payload,
         version: EVENT_SCHEMA_VERSION,
+        state_root: next_root,
     };
-    env.events()
-        .publish((schema.contract.clone(), schema.action.clone()), schema.clone());
+    env.events().publish(
+        (schema.contract.clone(), schema.action.clone()),
+        schema.clone(),
+    );
     record_event(env, &schema);
     schema
 }
@@ -103,9 +115,7 @@ pub fn emit_event_with<T: ToXdr + Clone>(
 mod tests {
     use super::*;
     use soroban_sdk::{
-        contract, contractimpl,
-        testutils::Address as _,
-        Address, Bytes, BytesN, Env, symbol_short,
+        contract, contractimpl, symbol_short, testutils::Address as _, Address, Bytes, BytesN, Env,
     };
 
     // Minimal contract so storage/event operations run inside a real contract
@@ -129,7 +139,12 @@ mod tests {
         let (env, contract) = test_env();
         let payload = Bytes::new(&env);
         let schema = env.as_contract(&contract, || {
-            emit_event(&env, symbol_short!("POLICY"), symbol_short!("CREATE"), payload.clone())
+            emit_event(
+                &env,
+                symbol_short!("POLICY"),
+                symbol_short!("CREATE"),
+                payload.clone(),
+            )
         });
         assert_eq!(schema.contract, symbol_short!("POLICY"));
         assert_eq!(schema.action, symbol_short!("CREATE"));
@@ -146,10 +161,20 @@ mod tests {
         let zero = BytesN::from_array(&env, &[0u8; 32]);
         let (root1, root2, s2) = env.as_contract(&contract, || {
             assert_eq!(get_events_root(&env), zero);
-            emit_event(&env, symbol_short!("CLAIMS"), symbol_short!("SUBMITTED"), Bytes::new(&env));
+            emit_event(
+                &env,
+                symbol_short!("CLAIMS"),
+                symbol_short!("SUBMITTED"),
+                Bytes::new(&env),
+            );
             let root1 = get_events_root(&env);
             assert_ne!(root1, zero);
-            let s2 = emit_event(&env, symbol_short!("CLAIMS"), symbol_short!("APPROVED"), Bytes::new(&env));
+            let s2 = emit_event(
+                &env,
+                symbol_short!("CLAIMS"),
+                symbol_short!("APPROVED"),
+                Bytes::new(&env),
+            );
             let root2 = get_events_root(&env);
             assert_ne!(root2, root1);
             (root1, root2, s2)
@@ -175,6 +200,7 @@ mod tests {
             tx_hash: BytesN::from_array(&env, &[0u8; 32]),
             payload: Bytes::new(&env),
             version: 1,
+            state_root: get_state_root(&env),
         };
         assert_eq!(hash_event(&env, &schema), hash_event(&env, &schema));
     }

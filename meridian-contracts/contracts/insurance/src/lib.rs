@@ -9,11 +9,13 @@
 //! Property insurance contract module wiring, types, and delegated implementations.
 
 use ink::storage::Mapping;
+use scale::Encode;
 use stellar_insured_lib::circuit_breaker::{
     CircuitBreakerError, CircuitBreakerTransition, InkCircuitBreaker,
 };
 
 mod rbac;
+mod state_root;
 pub use rbac::{Role, RoleManager};
 
 /// Decentralized Property Insurance Platform
@@ -158,6 +160,13 @@ mod propchain_insurance {
         /// Build a default instance with a zero admin for tests and tooling.
         fn default() -> Self {
             Self::new(AccountId::from([0x0; 32]))
+        }
+    }
+
+    impl PropertyInsurance {
+        #[ink(message)]
+        pub fn get_state_root(&self) -> crate::state_root::StateRoot {
+            crate::state_root::compute_root(&vec![self.admin.encode()])
         }
     }
 }

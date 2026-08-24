@@ -8,16 +8,17 @@ mod validation;
 mod migration_test;
 
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
-use stellar_insured_lib::events::emit_event_with;
-use stellar_insured_lib::{EscrowError, ValidationError};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 use stellar_insured_lib::circuit_breaker;
+use stellar_insured_lib::events::emit_event_with;
+use stellar_insured_lib::state_root::get_state_root;
+use stellar_insured_lib::{EscrowError, ValidationError};
 
 use storage::{DataKey, StorageVersion};
 use types::{ApprovalType, EscrowData, EscrowStatus, MultiSigConfig};
 use validation::{
-    require_future_timestamp, require_non_zero_address, require_non_zero_u64,
-    require_not_paused, require_positive_amount, require_valid_multisig,
+    require_future_timestamp, require_non_zero_address, require_non_zero_u64, require_not_paused,
+    require_positive_amount, require_valid_multisig,
 };
 
 const CONTRACT_VERSION: u32 = 1;
@@ -93,7 +94,8 @@ impl AdvancedEscrow {
         if participants.len() > MAX_PARTICIPANTS {
             return Err(EscrowError::TooManyParticipants);
         }
-        require_valid_multisig(required_signatures, participants.len()).map_err(|_| EscrowError::InvalidStatus)?;
+        require_valid_multisig(required_signatures, participants.len())
+            .map_err(|_| EscrowError::InvalidStatus)?;
         require_non_zero_address(&buyer).map_err(|_| EscrowError::Unauthorized)?;
         require_non_zero_address(&seller).map_err(|_| EscrowError::Unauthorized)?;
         for participant in participants.iter() {
@@ -240,7 +242,12 @@ impl AdvancedEscrow {
         Ok(())
     }
 
-    pub fn sign_approval(env: Env, escrow_id: u64, approval_type: ApprovalType, signer: Address) -> Result<(), EscrowError> {
+    pub fn sign_approval(
+        env: Env,
+        escrow_id: u64,
+        approval_type: ApprovalType,
+        signer: Address,
+    ) -> Result<(), EscrowError> {
         require_not_paused(&env).map_err(|_| EscrowError::Unauthorized)?;
         require_non_zero_u64(escrow_id, "escrow_id").map_err(|_| EscrowError::EscrowNotFound)?;
         signer.require_auth();
@@ -289,7 +296,11 @@ impl AdvancedEscrow {
         Ok(())
     }
 
-    pub fn migrate(env: Env, admin: Address, to_version: StorageVersion) -> Result<(), EscrowError> {
+    pub fn migrate(
+        env: Env,
+        admin: Address,
+        to_version: StorageVersion,
+    ) -> Result<(), EscrowError> {
         admin.require_auth();
         require_non_zero_address(&admin).map_err(|_| EscrowError::Unauthorized)?;
         access_control::require_role(&env, &admin, &AccessControlRole::Admin);
@@ -315,12 +326,19 @@ impl AdvancedEscrow {
                 if !env.storage().instance().has(&DataKey::FeeBps) {
                     env.storage().instance().set(&DataKey::FeeBps, &0u32);
                 }
-                env.storage().instance().set(&DataKey::Version, &StorageVersion::V2);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::Version, &StorageVersion::V2);
             }
             _ => return Err(EscrowError::InvalidStatus),
         }
 
-        emit_event_with(&env, symbol_short!("ESCROW"), symbol_short!("MIGRATED"), &to_version);
+        emit_event_with(
+            &env,
+            symbol_short!("ESCROW"),
+            symbol_short!("MIGRATED"),
+            &to_version,
+        );
         Ok(())
     }
 }
@@ -334,11 +352,12 @@ impl AdvancedEscrow {
             .unwrap_or(StorageVersion::V1)
     }
 
+    pub fn get_state_root(env: Env) -> soroban_sdk::BytesN<32> {
+        get_state_root(&env)
+    }
+
     pub fn get_fee_bps(env: Env) -> u32 {
-        env.storage()
-            .instance()
-            .get(&DataKey::FeeBps)
-            .unwrap_or(0)
+        env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0)
     }
 
     pub fn set_role(env: Env, addr: Address, role: AccessControlRole) -> Result<(), EscrowError> {
@@ -355,11 +374,16 @@ impl AdvancedEscrow {
     }
 
     pub fn get_escrow_count(env: Env) -> u64 {
-        env.storage().instance().get(&DataKey::EscrowCount).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DataKey::EscrowCount)
+            .unwrap_or(0)
     }
 
     pub fn get_multisig_config(env: Env, escrow_id: u64) -> Option<MultiSigConfig> {
-        env.storage().persistent().get(&DataKey::MultiSig(escrow_id))
+        env.storage()
+            .persistent()
+            .get(&DataKey::MultiSig(escrow_id))
     }
 
     pub fn get_sig_count(env: Env, escrow_id: u64, approval_type: ApprovalType) -> u32 {

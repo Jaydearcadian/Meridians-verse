@@ -81,11 +81,11 @@ pub struct Proposal {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GovernanceAction {
-    ClaimApproval(u64),  // claim_id
-    FundAllocation(Address, i128),  // recipient, amount
+    ClaimApproval(u64),              // claim_id
+    FundAllocation(Address, i128),   // recipient, amount
     PolicyChange(u64, PolicyPatch),  // policy_id, patch (#609)
-    Slashing(Address, Symbol, i128),  // target, role, amount (#601)
-    PauseContract(Address, u64),  // target contract, duration in seconds
+    Slashing(Address, Symbol, i128), // target, role, amount (#601)
+    PauseContract(Address, u64),     // target contract, duration in seconds
 }
 
 // #609: `Option<PolicyStatus>` isn't supported by soroban-sdk's ScVal/XDR

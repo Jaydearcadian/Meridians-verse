@@ -1,9 +1,10 @@
 #![no_std]
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, IntoVal};
-use stellar_insured_lib::{InsuranceClaim, ClaimStatus, InsurancePolicy, PolicyStatus, PoolStats};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 use stellar_insured_lib::events::emit_event_with;
+use stellar_insured_lib::state_root::get_state_root;
+use stellar_insured_lib::{ClaimStatus, InsuranceClaim, InsurancePolicy, PolicyStatus, PoolStats};
 
 #[contracttype]
 #[derive(Clone)]
@@ -22,15 +23,23 @@ pub enum DataKey {
 // --- Storage helpers (#378: data access abstraction) ---
 
 fn get_claim_counter(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::ClaimCounter).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::ClaimCounter)
+        .unwrap_or(0)
 }
 
 fn get_claim_inner(env: &Env, claim_id: u64) -> InsuranceClaim {
-    env.storage().persistent().get(&DataKey::Claim(claim_id)).expect("Claim not found")
+    env.storage()
+        .persistent()
+        .get(&DataKey::Claim(claim_id))
+        .expect("Claim not found")
 }
 
 fn set_claim(env: &Env, claim_id: u64, claim: &InsuranceClaim) {
-    env.storage().persistent().set(&DataKey::Claim(claim_id), claim);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Claim(claim_id), claim);
 }
 
 // --------------------------------------------------------
@@ -48,7 +57,9 @@ impl ClaimsContract {
             panic!("Addresses must be distinct");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::PolicyContract, &policy_contract);
+        env.storage()
+            .instance()
+            .set(&DataKey::PolicyContract, &policy_contract);
         env.storage().instance().set(&DataKey::RiskPool, &risk_pool);
         env.storage().instance().set(&DataKey::ClaimCounter, &0u64);
         access_control::init_access_control(&env, &admin);
@@ -60,7 +71,11 @@ impl ClaimsContract {
 
     pub fn submit_claim(env: Env, policy_id: u64, amount: i128) -> u64 {
         // #381: fetch policy and validate consistency before accepting claim
-        let policy_contract: Address = env.storage().instance().get(&DataKey::PolicyContract).unwrap();
+        let policy_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PolicyContract)
+            .unwrap();
         // #407: Centralized validation via Policy contract (includes expiration check)
         let is_active: bool = env.invoke_contract(
             &policy_contract,
@@ -83,7 +98,11 @@ impl ClaimsContract {
         }
 
         // #409: O(1) duplicate claim check — reject if an active claim already exists for this policy
-        if env.storage().persistent().has(&DataKey::PolicyActiveClaim(policy_id)) {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::PolicyActiveClaim(policy_id))
+        {
             panic!("Policy already has an active claim");
         }
 
@@ -92,7 +111,9 @@ impl ClaimsContract {
 
         let mut counter = get_claim_counter(&env);
         counter += 1;
-        env.storage().instance().set(&DataKey::ClaimCounter, &counter);
+        env.storage()
+            .instance()
+            .set(&DataKey::ClaimCounter, &counter);
 
         let claim = InsuranceClaim {
             claim_id: counter,
@@ -106,10 +127,17 @@ impl ClaimsContract {
         set_claim(&env, counter, &claim);
 
         // #409: Record the active claim for this policy (O(1) dedup key)
-        env.storage().persistent().set(&DataKey::PolicyActiveClaim(policy_id), &counter);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PolicyActiveClaim(policy_id), &counter);
 
         // Canonical, indexed event emission (see stellar_insured_lib::events).
-        emit_event_with(&env, symbol_short!("CLAIMS"), symbol_short!("SUBMITTED"), &claim);
+        emit_event_with(
+            &env,
+            symbol_short!("CLAIMS"),
+            symbol_short!("SUBMITTED"),
+            &claim,
+        );
 
         counter
     }
@@ -126,7 +154,12 @@ impl ClaimsContract {
         claim.status = ClaimStatus::UnderReview;
         set_claim(&env, claim_id, &claim);
 
-        emit_event_with(&env, symbol_short!("CLAIMS"), symbol_short!("REVIEW"), &claim);
+        emit_event_with(
+            &env,
+            symbol_short!("CLAIMS"),
+            symbol_short!("REVIEW"),
+            &claim,
+        );
     }
 
     pub fn approve_claim(env: Env, claim_id: u64) {
@@ -141,7 +174,12 @@ impl ClaimsContract {
         claim.status = ClaimStatus::Approved;
         set_claim(&env, claim_id, &claim);
 
-        emit_event_with(&env, symbol_short!("CLAIMS"), symbol_short!("APPROVED"), &claim);
+        emit_event_with(
+            &env,
+            symbol_short!("CLAIMS"),
+            symbol_short!("APPROVED"),
+            &claim,
+        );
     }
 
     pub fn reject_claim(env: Env, claim_id: u64) {
@@ -157,9 +195,16 @@ impl ClaimsContract {
         set_claim(&env, claim_id, &claim);
 
         // #409: Clear the active-claim lock so a new claim can be submitted for this policy
-        env.storage().persistent().remove(&DataKey::PolicyActiveClaim(claim.policy_id));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PolicyActiveClaim(claim.policy_id));
 
-        emit_event_with(&env, symbol_short!("CLAIMS"), symbol_short!("REJECTED"), &claim);
+        emit_event_with(
+            &env,
+            symbol_short!("CLAIMS"),
+            symbol_short!("REJECTED"),
+            &claim,
+        );
     }
 
     pub fn settle_claim(env: Env, claim_id: u64) {
@@ -173,14 +218,14 @@ impl ClaimsContract {
 
         // #410: Check risk pool balance before payout
         let risk_pool: Address = env.storage().instance().get(&DataKey::RiskPool).unwrap();
-        
+
         // Get pool stats to verify available capital
         let pool_stats: PoolStats = env.invoke_contract(
             &risk_pool,
             &symbol_short!("get_stats"),
             soroban_sdk::Vec::new(&env),
         );
-        
+
         if pool_stats.available_capital < claim.amount {
             panic!("Insufficient risk pool funds for payout");
         }
@@ -192,28 +237,51 @@ impl ClaimsContract {
         env.invoke_contract::<()>(
             &risk_pool,
             &symbol_short!("payout"),
-            soroban_sdk::vec![&env, claim.claimant.clone().into_val(&env), claim.amount.into_val(&env)],
+            soroban_sdk::vec![
+                &env,
+                claim.claimant.clone().into_val(&env),
+                claim.amount.into_val(&env)
+            ],
         );
 
         // Update total claimed in policy contract
-        let policy_contract: Address = env.storage().instance().get(&DataKey::PolicyContract).unwrap();
+        let policy_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PolicyContract)
+            .unwrap();
         env.invoke_contract::<()>(
             &policy_contract,
             &symbol_short!("update_cl"),
-            soroban_sdk::vec![&env, claim.policy_id.into_val(&env), claim.amount.into_val(&env)],
+            soroban_sdk::vec![
+                &env,
+                claim.policy_id.into_val(&env),
+                claim.amount.into_val(&env)
+            ],
         );
 
         claim.status = ClaimStatus::Settled;
         set_claim(&env, claim_id, &claim);
 
         // #409: Clear the active-claim lock after settlement
-        env.storage().persistent().remove(&DataKey::PolicyActiveClaim(claim.policy_id));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PolicyActiveClaim(claim.policy_id));
 
-        emit_event_with(&env, symbol_short!("CLAIMS"), symbol_short!("SETTLED"), &claim);
+        emit_event_with(
+            &env,
+            symbol_short!("CLAIMS"),
+            symbol_short!("SETTLED"),
+            &claim,
+        );
     }
 
     pub fn get_claim(env: Env, claim_id: u64) -> InsuranceClaim {
         get_claim_inner(&env, claim_id)
+    }
+
+    pub fn get_state_root(env: Env) -> soroban_sdk::BytesN<32> {
+        get_state_root(&env)
     }
 
     pub fn get_stats(env: Env) -> u64 {
@@ -225,7 +293,7 @@ impl ClaimsContract {
 mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Env, Address};
+    use soroban_sdk::{Address, Env};
 
     fn setup() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();
@@ -245,7 +313,11 @@ mod tests {
         });
         // admin should have Admin role
         env.as_contract(&contract, || {
-            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
+            assert!(access_control::has_role(
+                &env,
+                &admin,
+                &AccessControlRole::Admin
+            ));
         });
     }
 
@@ -310,7 +382,7 @@ mod access_control_test;
 mod verification_tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Env, Address};
+    use soroban_sdk::{Address, Env};
 
     /// Kani harness: claim.amount <= policy.coverage_amount.
     #[cfg(feature = "kani")]

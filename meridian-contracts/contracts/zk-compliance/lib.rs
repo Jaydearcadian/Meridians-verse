@@ -21,6 +21,8 @@
 mod verification_keys;
 #[path = "src/validation.rs"]
 mod validation;
+#[path = "state_root.rs"]
+mod state_root;
 
 #[ink::contract]
 mod zk_compliance {
@@ -709,6 +711,11 @@ mod zk_compliance {
         #[ink(message)]
         pub fn get_verification_stats(&self) -> Result<&VerificationStats> {
             Ok(&self.verification_stats)
+        }
+
+        #[ink(message)]
+        pub fn get_state_root(&self) -> crate::state_root::StateRoot {
+            crate::state_root::compute_root(&vec![self.owner.encode(), self.verification_stats.total_verifications.encode()])
         }
 
         /// Perform compliance verification without exposing user data

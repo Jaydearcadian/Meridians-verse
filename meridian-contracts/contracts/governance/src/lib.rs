@@ -1,9 +1,12 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, Symbol, IntoVal};
-use stellar_insured_lib::{Proposal, GovernanceAction, GovernanceError, PolicyPatch};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, String, Symbol, Vec,
+};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 use stellar_insured_lib::events::emit_event_with;
+use stellar_insured_lib::state_root::get_state_root;
+use stellar_insured_lib::{GovernanceAction, GovernanceError, PolicyPatch, Proposal};
 
 #[contracttype]
 #[derive(Clone)]
@@ -18,7 +21,7 @@ pub enum DataKey {
     ProposalCounter,
     VoterRecord(u64, Address),
     VotingPeriod,
-    GovernanceActionPending(u64),  // proposal_id -> GovernanceAction
+    GovernanceActionPending(u64), // proposal_id -> GovernanceAction
 }
 
 #[contracttype]
@@ -42,19 +45,30 @@ pub struct ProposalStats {
 // --- Storage helpers (#378: data access abstraction) ---
 
 fn get_voting_period(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::VotingPeriod).unwrap()
+    env.storage()
+        .instance()
+        .get(&DataKey::VotingPeriod)
+        .unwrap()
 }
 
 fn get_proposal_counter(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::ProposalCounter).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::ProposalCounter)
+        .unwrap_or(0)
 }
 
 fn get_proposal_inner(env: &Env, proposal_id: u64) -> Proposal {
-    env.storage().persistent().get(&DataKey::Proposal(proposal_id)).expect("Proposal not found")
+    env.storage()
+        .persistent()
+        .get(&DataKey::Proposal(proposal_id))
+        .expect("Proposal not found")
 }
 
 fn set_proposal(env: &Env, proposal_id: u64, proposal: &Proposal) {
-    env.storage().persistent().set(&DataKey::Proposal(proposal_id), proposal);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Proposal(proposal_id), proposal);
 }
 
 // --------------------------------------------------------
@@ -79,12 +93,24 @@ impl GovernanceContract {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
-        env.storage().instance().set(&DataKey::SlashingContract, &slashing_contract);
-        env.storage().instance().set(&DataKey::VotingPeriod, &voting_period);
-        env.storage().instance().set(&DataKey::ProposalCounter, &0u64);
-        env.storage().instance().set(&DataKey::ClaimsContract, &claims_contract);
-        env.storage().instance().set(&DataKey::RiskPoolContract, &risk_pool_contract);
-        env.storage().instance().set(&DataKey::PolicyContract, &policy_contract);
+        env.storage()
+            .instance()
+            .set(&DataKey::SlashingContract, &slashing_contract);
+        env.storage()
+            .instance()
+            .set(&DataKey::VotingPeriod, &voting_period);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCounter, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::ClaimsContract, &claims_contract);
+        env.storage()
+            .instance()
+            .set(&DataKey::RiskPoolContract, &risk_pool_contract);
+        env.storage()
+            .instance()
+            .set(&DataKey::PolicyContract, &policy_contract);
         access_control::init_access_control(&env, &admin);
 
         // Canonical, indexed event emission (see stellar_insured_lib::events).
@@ -92,7 +118,11 @@ impl GovernanceContract {
         Ok(())
     }
 
-    pub fn set_role(env: Env, addr: Address, role: AccessControlRole) -> Result<(), GovernanceError> {
+    pub fn set_role(
+        env: Env,
+        addr: Address,
+        role: AccessControlRole,
+    ) -> Result<(), GovernanceError> {
         access_control::set_role(&env, &env.current_contract_address(), &addr, role);
         Ok(())
     }
@@ -109,11 +139,16 @@ impl GovernanceContract {
 
         let mut counter = get_proposal_counter(&env);
         counter += 1;
-        env.storage().instance().set(&DataKey::ProposalCounter, &counter);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCounter, &counter);
 
-        let voting_period: u64 = env.storage().instance().get(&DataKey::VotingPeriod)
+        let voting_period: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::VotingPeriod)
             .ok_or(GovernanceError::NotInitialized)?;
-        
+
         let proposal = Proposal {
             id: counter,
             title,
@@ -130,7 +165,12 @@ impl GovernanceContract {
 
         set_proposal(&env, counter, &proposal);
 
-        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("CREATED"), &proposal);
+        emit_event_with(
+            &env,
+            symbol_short!("GOV"),
+            symbol_short!("CREATED"),
+            &proposal,
+        );
 
         Ok(counter)
     }
@@ -151,7 +191,9 @@ impl GovernanceContract {
 
         let mut counter = get_proposal_counter(&env);
         counter += 1;
-        env.storage().instance().set(&DataKey::ProposalCounter, &counter);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCounter, &counter);
 
         let proposal = Proposal {
             id: counter,
@@ -171,9 +213,16 @@ impl GovernanceContract {
 
         // #601: persist the slashing action so execute_proposal can carry it out.
         let action = GovernanceAction::Slashing(target.clone(), role.clone(), amount);
-        env.storage().persistent().set(&DataKey::GovernanceActionPending(counter), &action);
+        env.storage()
+            .persistent()
+            .set(&DataKey::GovernanceActionPending(counter), &action);
 
-        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("SLASH_PRO"), &proposal);
+        emit_event_with(
+            &env,
+            symbol_short!("GOV"),
+            symbol_short!("SLASH_PRO"),
+            &proposal,
+        );
 
         Ok(counter)
     }
@@ -193,9 +242,14 @@ impl GovernanceContract {
 
         let mut counter = get_proposal_counter(&env);
         counter += 1;
-        env.storage().instance().set(&DataKey::ProposalCounter, &counter);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCounter, &counter);
 
-        let voting_period: u64 = env.storage().instance().get(&DataKey::VotingPeriod)
+        let voting_period: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::VotingPeriod)
             .ok_or(GovernanceError::NotInitialized)?;
 
         let proposal = Proposal {
@@ -216,9 +270,16 @@ impl GovernanceContract {
 
         // Store the governance action
         let action = GovernanceAction::ClaimApproval(claim_id);
-        env.storage().persistent().set(&DataKey::GovernanceActionPending(counter), &action);
+        env.storage()
+            .persistent()
+            .set(&DataKey::GovernanceActionPending(counter), &action);
 
-        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("CLAIM_PRO"), &proposal);
+        emit_event_with(
+            &env,
+            symbol_short!("GOV"),
+            symbol_short!("CLAIM_PRO"),
+            &proposal,
+        );
 
         Ok(counter)
     }
@@ -239,9 +300,14 @@ impl GovernanceContract {
 
         let mut counter = get_proposal_counter(&env);
         counter += 1;
-        env.storage().instance().set(&DataKey::ProposalCounter, &counter);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCounter, &counter);
 
-        let voting_period: u64 = env.storage().instance().get(&DataKey::VotingPeriod)
+        let voting_period: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::VotingPeriod)
             .ok_or(GovernanceError::NotInitialized)?;
 
         let proposal = Proposal {
@@ -262,9 +328,16 @@ impl GovernanceContract {
 
         // Store the governance action
         let action = GovernanceAction::FundAllocation(recipient.clone(), amount);
-        env.storage().persistent().set(&DataKey::GovernanceActionPending(counter), &action);
+        env.storage()
+            .persistent()
+            .set(&DataKey::GovernanceActionPending(counter), &action);
 
-        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("FUND_PROP"), &proposal);
+        emit_event_with(
+            &env,
+            symbol_short!("GOV"),
+            symbol_short!("FUND_PROP"),
+            &proposal,
+        );
 
         Ok(counter)
     }
@@ -285,9 +358,14 @@ impl GovernanceContract {
 
         let mut counter = get_proposal_counter(&env);
         counter += 1;
-        env.storage().instance().set(&DataKey::ProposalCounter, &counter);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCounter, &counter);
 
-        let voting_period: u64 = env.storage().instance().get(&DataKey::VotingPeriod)
+        let voting_period: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::VotingPeriod)
             .ok_or(GovernanceError::NotInitialized)?;
 
         let proposal = Proposal {
@@ -308,9 +386,16 @@ impl GovernanceContract {
 
         // Store the governance action
         let action = GovernanceAction::PolicyChange(policy_id, patch);
-        env.storage().persistent().set(&DataKey::GovernanceActionPending(counter), &action);
+        env.storage()
+            .persistent()
+            .set(&DataKey::GovernanceActionPending(counter), &action);
 
-        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("POLICY_PR"), &proposal);
+        emit_event_with(
+            &env,
+            symbol_short!("GOV"),
+            symbol_short!("POLICY_PR"),
+            &proposal,
+        );
 
         Ok(counter)
     }
@@ -330,7 +415,9 @@ impl GovernanceContract {
 
         let mut counter = get_proposal_counter(&env);
         counter += 1;
-        env.storage().instance().set(&DataKey::ProposalCounter, &counter);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCounter, &counter);
 
         let proposal = Proposal {
             id: counter,
@@ -350,11 +437,22 @@ impl GovernanceContract {
             &DataKey::GovernanceActionPending(counter),
             &GovernanceAction::PauseContract(target_contract, duration_seconds),
         );
-        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("PAUSE_PR"), &proposal);
+        emit_event_with(
+            &env,
+            symbol_short!("GOV"),
+            symbol_short!("PAUSE_PR"),
+            &proposal,
+        );
         Ok(counter)
     }
 
-    pub fn vote(env: Env, voter: Address, proposal_id: u64, weight: i128, is_yes: bool) -> Result<(), GovernanceError> {
+    pub fn vote(
+        env: Env,
+        voter: Address,
+        proposal_id: u64,
+        weight: i128,
+        is_yes: bool,
+    ) -> Result<(), GovernanceError> {
         voter.require_auth();
 
         let mut proposal = get_proposal_inner(&env, proposal_id);
@@ -398,7 +496,12 @@ impl GovernanceContract {
         proposal.is_finalized = true;
         set_proposal(&env, proposal_id, &proposal);
 
-        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("FINAL"), &proposal);
+        emit_event_with(
+            &env,
+            symbol_short!("GOV"),
+            symbol_short!("FINAL"),
+            &proposal,
+        );
         Ok(())
     }
 
@@ -414,7 +517,9 @@ impl GovernanceContract {
         }
 
         let total_votes = proposal.yes_votes + proposal.no_votes;
-        if total_votes == 0 || (proposal.yes_votes * 100 / total_votes) < proposal.threshold_percentage as i128 {
+        if total_votes == 0
+            || (proposal.yes_votes * 100 / total_votes) < proposal.threshold_percentage as i128
+        {
             return Err(GovernanceError::ThresholdNotMet);
         }
 
@@ -422,11 +527,14 @@ impl GovernanceContract {
         let action_key = DataKey::GovernanceActionPending(proposal_id);
         if env.storage().persistent().has(&action_key) {
             let action: GovernanceAction = env.storage().persistent().get(&action_key).unwrap();
-            
+
             match action {
                 GovernanceAction::ClaimApproval(claim_id) => {
                     // Call claims contract to approve the claim
-                    let claims_contract: Address = env.storage().instance().get(&DataKey::ClaimsContract)
+                    let claims_contract: Address = env
+                        .storage()
+                        .instance()
+                        .get(&DataKey::ClaimsContract)
                         .ok_or(GovernanceError::ClaimsContractNotSet)?;
                     env.invoke_contract::<()>(
                         &claims_contract,
@@ -436,7 +544,10 @@ impl GovernanceContract {
                 }
                 GovernanceAction::FundAllocation(recipient, amount) => {
                     // Call risk pool to allocate funds
-                    let risk_pool: Address = env.storage().instance().get(&DataKey::RiskPoolContract)
+                    let risk_pool: Address = env
+                        .storage()
+                        .instance()
+                        .get(&DataKey::RiskPoolContract)
                         .ok_or(GovernanceError::RiskPoolContractNotSet)?;
                     env.invoke_contract::<()>(
                         &risk_pool,
@@ -447,7 +558,10 @@ impl GovernanceContract {
                 GovernanceAction::PolicyChange(policy_id, patch) => {
                     // #609: apply the DAO-approved patch through the policy
                     // contract's governance-gated entry point.
-                    let policy_contract: Address = env.storage().instance().get(&DataKey::PolicyContract)
+                    let policy_contract: Address = env
+                        .storage()
+                        .instance()
+                        .get(&DataKey::PolicyContract)
                         .ok_or(GovernanceError::PolicyContractNotSet)?;
                     env.invoke_contract::<()>(
                         &policy_contract,
@@ -458,7 +572,10 @@ impl GovernanceContract {
                 GovernanceAction::Slashing(target, role, amount) => {
                     // #601: end-to-end slashing pipeline.
                     // 1. Slash the target's stake via the slashing contract.
-                    let slashing_contract: Address = env.storage().instance().get(&DataKey::SlashingContract)
+                    let slashing_contract: Address = env
+                        .storage()
+                        .instance()
+                        .get(&DataKey::SlashingContract)
                         .ok_or(GovernanceError::SlashingContractNotSet)?;
                     let reason = String::from_str(&env, "governance_slash");
                     env.invoke_contract::<()>(
@@ -475,7 +592,10 @@ impl GovernanceContract {
 
                     // 2. Route the slashed stake to the risk pool (mirrors the
                     //    oracle's slash_source -> risk_pool transfer).
-                    let risk_pool: Address = env.storage().instance().get(&DataKey::RiskPoolContract)
+                    let risk_pool: Address = env
+                        .storage()
+                        .instance()
+                        .get(&DataKey::RiskPoolContract)
                         .ok_or(GovernanceError::RiskPoolContractNotSet)?;
                     env.invoke_contract::<()>(
                         &risk_pool,
@@ -521,7 +641,12 @@ impl GovernanceContract {
         proposal.is_executed = true;
         set_proposal(&env, proposal_id, &proposal);
 
-        emit_event_with(&env, symbol_short!("GOV"), symbol_short!("EXECUTED"), &proposal);
+        emit_event_with(
+            &env,
+            symbol_short!("GOV"),
+            symbol_short!("EXECUTED"),
+            &proposal,
+        );
         Ok(())
     }
 
@@ -536,12 +661,20 @@ impl GovernanceContract {
         get_proposal_inner(&env, proposal_id)
     }
 
+    pub fn get_state_root(env: Env) -> soroban_sdk::BytesN<32> {
+        get_state_root(&env)
+    }
+
     pub fn get_active_proposals(env: Env) -> Vec<u64> {
         let counter = get_proposal_counter(&env);
         let mut list = Vec::new(&env);
         let now = env.ledger().timestamp();
         for i in 1..=counter {
-            if let Some(p) = env.storage().persistent().get::<DataKey, Proposal>(&DataKey::Proposal(i)) {
+            if let Some(p) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Proposal>(&DataKey::Proposal(i))
+            {
                 if !p.is_finalized && now <= p.expires_at {
                     list.push_back(i);
                 }
@@ -581,7 +714,9 @@ impl GovernanceContract {
     }
 
     pub fn get_vote_record(env: Env, proposal_id: u64, voter: Address) -> Option<VoteRecord> {
-        env.storage().persistent().get(&DataKey::VoterRecord(proposal_id, voter))
+        env.storage()
+            .persistent()
+            .get(&DataKey::VoterRecord(proposal_id, voter))
     }
 }
 
@@ -589,7 +724,7 @@ impl GovernanceContract {
 mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Env, Address};
+    use soroban_sdk::{Address, Env};
 
     fn setup() -> (Env, Address, Address) {
         let env = Env::default();
@@ -611,7 +746,8 @@ mod tests {
                 claims,
                 risk_pool,
                 policy,
-            ).unwrap();
+            )
+            .unwrap();
         });
         (env, contract, admin)
     }
@@ -620,7 +756,11 @@ mod tests {
     fn test_initialize_sets_admin_role() {
         let (env, contract, admin) = setup();
         env.as_contract(&contract, || {
-            assert!(access_control::has_role(&env, &admin, &AccessControlRole::Admin));
+            assert!(access_control::has_role(
+                &env,
+                &admin,
+                &AccessControlRole::Admin
+            ));
         });
     }
 
@@ -927,7 +1067,8 @@ mod policy_change_pipeline_tests {
             &policy_id,
         );
 
-        let policy_record_id = policy.issue_policy(&holder, &1000, &100, &365, &PolicyType::Standard);
+        let policy_record_id =
+            policy.issue_policy(&holder, &1000, &100, &365, &PolicyType::Standard);
 
         Harness {
             env,
@@ -951,7 +1092,8 @@ mod policy_change_pipeline_tests {
             status: StatusPatch::Set(PolicyStatus::Cancelled),
         };
 
-        let proposal_id = gov.create_policy_change_proposal(&h.creator, &h.policy_record_id, &patch, &50);
+        let proposal_id =
+            gov.create_policy_change_proposal(&h.creator, &h.policy_record_id, &patch, &50);
         gov.vote(&h.voter, &proposal_id, &100, &true);
 
         h.advance_past_voting_period();
@@ -975,7 +1117,8 @@ mod policy_change_pipeline_tests {
             status: StatusPatch::Keep,
         };
 
-        let proposal_id = gov.create_policy_change_proposal(&h.creator, &h.policy_record_id, &patch, &50);
+        let proposal_id =
+            gov.create_policy_change_proposal(&h.creator, &h.policy_record_id, &patch, &50);
 
         // Vote no so the yes-threshold is not met.
         gov.vote(&h.voter, &proposal_id, &100, &false);
@@ -1004,7 +1147,7 @@ mod policy_change_pipeline_tests {
 mod verification_tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Env, Address};
+    use soroban_sdk::{Address, Env};
 
     /// Kani harness: yes_votes + no_votes == total_weight.
     #[cfg(feature = "kani")]
@@ -1018,7 +1161,11 @@ mod verification_tests {
         kani::assume(no_votes >= 0);
         kani::assume(total_weight >= 0);
         kani::assume(yes_votes + no_votes == total_weight);
-        assert!(vote_sum_equals_total_weight(yes_votes, no_votes, total_weight));
+        assert!(vote_sum_equals_total_weight(
+            yes_votes,
+            no_votes,
+            total_weight
+        ));
     }
 
     /// Kani harness: threshold monotonicity — increasing threshold cannot make a
@@ -1035,7 +1182,12 @@ mod verification_tests {
         kani::assume(total_votes >= 0);
         kani::assume(total_votes > 0);
         kani::assume(threshold_new > threshold_old);
-        assert!(threshold_monotonic(yes_votes, total_votes, threshold_old, threshold_new));
+        assert!(threshold_monotonic(
+            yes_votes,
+            total_votes,
+            threshold_old,
+            threshold_new
+        ));
     }
 
     /// Property-based test: vote sum equals total weight.
@@ -1109,7 +1261,8 @@ mod verification_tests {
                 claims,
                 risk_pool,
                 policy,
-            ).unwrap();
+            )
+            .unwrap();
         });
 
         // Create proposal and vote
@@ -1121,7 +1274,8 @@ mod verification_tests {
                 String::from_str(&env, "Desc"),
                 String::from_str(&env, "exec"),
                 50,
-            ).unwrap()
+            )
+            .unwrap()
         });
 
         let voter = Address::generate(&env);

@@ -1,5 +1,5 @@
 use soroban_sdk::{Address, Env};
-use stellar_insured_lib::{ValidationError, validate_address, validate_amount, validate_timestamp};
+use stellar_insured_lib::{validate_address, validate_amount, validate_timestamp, ValidationError};
 
 /// Checks if the contract is paused and returns an error if so.
 ///
@@ -32,14 +32,22 @@ pub fn require_positive_amount(amount: i128, _field: &str) -> Result<(), Validat
 }
 
 /// Checks if `timestamp` is in the past or present relative to `now`.
-pub fn require_future_timestamp(timestamp: u64, now: u64, _field: &str) -> Result<(), ValidationError> {
+pub fn require_future_timestamp(
+    timestamp: u64,
+    now: u64,
+    _field: &str,
+) -> Result<(), ValidationError> {
     validate_timestamp(timestamp, now)
 }
 
 /// Checks if `required_signatures` is zero, `participants` is empty,
 /// or `required_signatures` exceeds the number of participants.
-pub fn require_valid_multisig(required_signatures: u32, participant_count: u32) -> Result<(), ValidationError> {
-    if required_signatures == 0 || participant_count == 0 || required_signatures > participant_count {
+pub fn require_valid_multisig(
+    required_signatures: u32,
+    participant_count: u32,
+) -> Result<(), ValidationError> {
+    if required_signatures == 0 || participant_count == 0 || required_signatures > participant_count
+    {
         return Err(ValidationError::InvalidMultisigConfig);
     }
     Ok(())
