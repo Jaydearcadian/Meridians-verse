@@ -69,6 +69,9 @@ export class AuditLog {
   @Column({ type: 'varchar', length: 128, nullable: true })
   chainHash: string | null;
 
+  @Column({ type: 'varchar', length: 128, nullable: true })
+  stateRoot: string | null;
+
   @Column({ type: 'json', nullable: true })
   rawEvent: Record<string, unknown> | null;
 

@@ -30,6 +30,7 @@ export interface ContractEventContext {
   participantAddress?: string | null;
   contributionXp?: number;
   epochNumber?: number | null;
+  stateRoot?: string | null;
   correlationId?: string | null;
 }
 
@@ -102,6 +103,7 @@ export class AuditService {
       blockNumber: ctx.blockNumber,
       previousHash,
       chainHash,
+      stateRoot: ctx.stateRoot ?? null,
       rawEvent: ctx.rawEvent ?? null,
       participantAddress: ctx.participantAddress ?? null,
       contributionXp: ctx.contributionXp ?? 0,
