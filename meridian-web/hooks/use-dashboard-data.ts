@@ -3,6 +3,11 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { DashboardData, pollDashboardData } from '@/lib/api/dashboard'
 import { mark, measure } from '@/lib/utils/performance'
+import {
+  DASHBOARD_CACHE_URL,
+  readApiCache,
+  writeApiCache,
+} from '@/lib/pwa/api-cache'
 
 /**
  * Configuration for dashboard data sync
@@ -26,6 +31,8 @@ interface DashboardDataState {
   isLoading: boolean
   isError: boolean
   isOffline: boolean
+  /** True while the rendered data came from a cache and has not been revalidated. */
+  isStale: boolean
   lastUpdated: Date | null
   error: Error | null
 }
@@ -38,11 +45,13 @@ const CACHE_TTL = 1000 * 60 * 60 // 1 hour
  * Custom hook for dashboard data with real-time updates and offline support
  * 
  * Features:
+ * - Cache-first paint: the service worker's Cache Storage is read before the
+ *   network so an offline cold start renders real data instead of a skeleton
  * - Real-time polling with configurable interval
  * - Offline detection and cached data fallback
  * - Automatic retry on error
  * - Zero layout shift (returns initialData immediately)
- * - localStorage caching for offline resilience
+ * - localStorage caching as a fallback where Cache Storage is unavailable
  * 
  * @example
  * ```tsx
@@ -65,12 +74,15 @@ export function useDashboardData(options: UseDashboardDataOptions = {}) {
     isLoading: false,
     isError: false,
     isOffline: false,
+    isStale: false,
     lastUpdated: initialData ? new Date(initialData.lastUpdated) : null,
     error: null,
   })
 
   const pollingIntervalRef = useRef<NodeJS.Timeout>()
   const isOnlineRef = useRef(true)
+  /** Set once the network has answered, so a late cache read cannot regress it. */
+  const hasFreshDataRef = useRef(Boolean(initialData))
 
   /**
    * Load cached data from localStorage
@@ -114,9 +126,34 @@ export function useDashboardData(options: UseDashboardDataOptions = {}) {
       } catch (error) {
         console.error('Failed to cache dashboard data:', error)
       }
+
+      // Mirror into the service worker's API cache so an offline cold start
+      // (where no JS-visible localStorage read has happened yet) still paints
+      // real data, and so a future real `/api/dashboard` endpoint shares one
+      // cache entry with the worker's own runtime caching.
+      void writeApiCache(DASHBOARD_CACHE_URL, data)
     },
     [enableCache]
   )
+
+  /**
+   * Cache-first read. Prefers Cache Storage (written by this hook and by the
+   * service worker) and falls back to localStorage where it is unavailable.
+   */
+  const loadCacheFirst = useCallback(async (): Promise<{
+    data: DashboardData
+    cachedAt: number
+  } | null> => {
+    if (!enableCache || typeof window === 'undefined') return null
+
+    const cached = await readApiCache<DashboardData>(DASHBOARD_CACHE_URL)
+    if (cached && Date.now() - cached.cachedAt <= CACHE_TTL) {
+      return { data: cached.data, cachedAt: cached.cachedAt }
+    }
+
+    const fallback = loadCachedData()
+    return fallback ? { data: fallback, cachedAt: Date.now() } : null
+  }, [enableCache, loadCachedData])
 
   /**
    * Fetch fresh data from API
@@ -155,11 +192,14 @@ export function useDashboardData(options: UseDashboardDataOptions = {}) {
         }
       }
 
+      hasFreshDataRef.current = true
+
       setState(prev => ({
         ...prev,
         data: freshData,
         isLoading: false,
         isOffline: false,
+        isStale: false,
         lastUpdated: new Date(freshData.lastUpdated),
         error: null,
       }))
@@ -178,10 +218,41 @@ export function useDashboardData(options: UseDashboardDataOptions = {}) {
         isLoading: false,
         isError: true,
         isOffline: !navigator.onLine,
+        isStale: Boolean(cachedData || prev.data),
         error: error instanceof Error ? error : new Error('Failed to fetch data'),
       }))
     }
   }, [loadCachedData, saveCachedData])
+
+  /**
+   * Cache-first hydration: paint whatever the service worker (or a previous
+   * session) cached before the first network round-trip resolves. Skipped once
+   * the network has answered so a slow cache read can never clobber fresh data.
+   */
+  useEffect(() => {
+    if (!enableCache || initialData) return
+
+    let cancelled = false
+
+    loadCacheFirst().then(cached => {
+      if (cancelled || !cached || hasFreshDataRef.current) return
+
+      setState(prev =>
+        prev.data
+          ? prev
+          : {
+              ...prev,
+              data: cached.data,
+              isStale: true,
+              lastUpdated: new Date(cached.data.lastUpdated),
+            }
+      )
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [enableCache, initialData, loadCacheFirst])
 
   /**
    * Handle online/offline events
@@ -198,13 +269,18 @@ export function useDashboardData(options: UseDashboardDataOptions = {}) {
 
     const handleOffline = () => {
       isOnlineRef.current = false
-      const cachedData = loadCachedData()
-      
-      setState(prev => ({
-        ...prev,
-        isOffline: true,
-        data: cachedData || prev.data,
-      }))
+
+      setState(prev => ({ ...prev, isOffline: true }))
+
+      // Fall back to the cache — Cache Storage first, then localStorage.
+      loadCacheFirst().then(cached => {
+        if (!cached) return
+        setState(prev => ({
+          ...prev,
+          data: prev.data || cached.data,
+          isStale: true,
+        }))
+      })
     }
 
     window.addEventListener('online', handleOnline)
@@ -219,7 +295,7 @@ export function useDashboardData(options: UseDashboardDataOptions = {}) {
       window.removeEventListener('online', handleOnline)
       window.removeEventListener('offline', handleOffline)
     }
-  }, [fetchData, loadCachedData])
+  }, [fetchData, loadCacheFirst])
 
   /**
    * Set up polling interval
@@ -260,6 +336,8 @@ export function useDashboardData(options: UseDashboardDataOptions = {}) {
     isLoading: state.isLoading,
     isError: state.isError,
     isOffline: state.isOffline,
+    /** Data came from a cache and has not been revalidated against the network. */
+    isStale: state.isStale,
     lastUpdated: state.lastUpdated,
     error: state.error,
     refresh,
