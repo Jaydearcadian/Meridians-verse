@@ -12,6 +12,14 @@ export const envValidationSchema = Joi.object({
   // Railway-style single connection URL (optional; takes precedence over individual vars)
   DATABASE_URL: Joi.string().uri().optional(),
 
+  // Read replica URL for SELECT queries (optional; uses primary if not set)
+  DATABASE_REPLICA_URL: Joi.string().uri().optional().allow(''),
+
+  // Connection pool tuning variables
+  DB_POOL_MIN: Joi.number().integer().min(0).default(2),
+  DB_POOL_MAX: Joi.number().integer().min(1).default(10),
+  DB_POOL_IDLE_TIMEOUT_MS: Joi.number().integer().min(0).default(30000),
+
   // Individual Postgres vars (required when DATABASE_URL is absent)
   POSTGRES_HOST: Joi.string().when('DATABASE_URL', {
     is: Joi.exist(),

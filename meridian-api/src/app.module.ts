@@ -78,44 +78,87 @@ import { RateLimitModule } from './rate-limit/rate-limit.module';
 
     /**
      * DATABASE CONFIG (Railway + Local Compatible)
+     * Added connection pool configuration and read-replica support
      */
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
         const databaseUrl = config.get<string>('DATABASE_URL');
+        const replicaUrl = config.get<string>('DATABASE_REPLICA_URL');
+
+        // Connection pool configuration
+        const poolMin = config.get<number>('DB_POOL_MIN', 2);
+        const poolMax = config.get<number>('DB_POOL_MAX', 10);
+        const poolIdleTimeout = config.get<number>('DB_POOL_IDLE_TIMEOUT_MS', 30000);
+
+        const baseConfig = {
+          type: 'postgres' as const,
+          autoLoadEntities: true,
+          synchronize: false,
+          migrations: [join(__dirname, 'database/migrations/*{.ts,.js}')],
+          migrationsRun: true,
+          ssl: {
+            rejectUnauthorized: false,
+          },
+          retryAttempts: process.env.NODE_ENV === 'test' ? 1 : 10,
+          retryDelay: process.env.NODE_ENV === 'test' ? 100 : 3000,
+          // Connection pool settings
+          extra: {
+            max: poolMax,
+            min: poolMin,
+            idleTimeoutMillis: poolIdleTimeout,
+          },
+        };
 
         // ✅ If Railway provides DATABASE_URL → use it
         if (databaseUrl) {
           return {
-            type: 'postgres',
+            ...baseConfig,
             url: databaseUrl,
-            autoLoadEntities: true,
-            synchronize: false,
-            migrations: [join(__dirname, 'database/migrations/*{.ts,.js}')],
-            migrationsRun: true,
-            ssl: {
-              rejectUnauthorized: false,
-            },
-            retryAttempts: process.env.NODE_ENV === 'test' ? 1 : 10,
-            retryDelay: process.env.NODE_ENV === 'test' ? 100 : 3000,
+            // Read-replica configuration (if replica URL is provided)
+            replication: replicaUrl
+              ? {
+                  master: {
+                    url: databaseUrl,
+                  },
+                  slaves: [
+                    {
+                      url: replicaUrl,
+                    },
+                  ],
+                }
+              : undefined,
           };
         }
 
         // ✅ Local development fallback
         return {
-          type: 'postgres',
+          ...baseConfig,
           host: config.get<string>('POSTGRES_HOST'),
           port: Number(config.get('POSTGRES_PORT')),
           username: config.get<string>('POSTGRES_USER'),
           password: config.get<string>('POSTGRES_PASSWORD'),
           database: config.get<string>('POSTGRES_DB'),
           synchronize: config.get<string>('POSTGRES_SYNC') === 'true',
-          // Run migrations instead of synchronize when sync is off (prod-like).
-          migrations: [join(__dirname, 'database/migrations/*{.ts,.js}')],
           migrationsRun: config.get<string>('POSTGRES_SYNC') !== 'true',
           autoLoadEntities: config.get<string>('POSTGRES_LOAD') === 'true',
-          retryAttempts: process.env.NODE_ENV === 'test' ? 1 : 10,
-          retryDelay: process.env.NODE_ENV === 'test' ? 100 : 3000,
+          // Read-replica configuration for local development (if replica vars are set)
+          replication: replicaUrl
+            ? {
+                master: {
+                  host: config.get<string>('POSTGRES_HOST'),
+                  port: Number(config.get('POSTGRES_PORT')),
+                  username: config.get<string>('POSTGRES_USER'),
+                  password: config.get<string>('POSTGRES_PASSWORD'),
+                  database: config.get<string>('POSTGRES_DB'),
+                },
+                slaves: [
+                  {
+                    url: replicaUrl,
+                  },
+                ],
+              }
+            : undefined,
         };
       },
     }),
