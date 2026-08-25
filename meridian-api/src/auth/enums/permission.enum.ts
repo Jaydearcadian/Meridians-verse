@@ -17,6 +17,8 @@ export enum Permission {
   USERS_DELETE = 'users:delete',
   /** Assign roles to users (admin-only endpoints). */
   USERS_MANAGE_ROLES = 'users:manage-roles',
+  /** Unlock a locked user account (admin-only endpoint). */
+  USERS_UNLOCK = 'users:unlock',
 
   // ---- posts ----
   /** Create a post (POST /posts). Any authenticated user. */

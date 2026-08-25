@@ -78,6 +78,29 @@ export class User {
   @Column('text', { nullable: true })
   encryptedData: string | null;
 
+  // --- Account lockout (issue #650) ---
+  // Tracks consecutive failed login attempts. When it exceeds the configured
+  // threshold the account is locked for an exponentially increasing duration.
+  @Exclude()
+  @Column({ type: 'int', default: 0 })
+  failedLoginCount: number;
+
+  // Number of times this account has been locked.  Used for exponential
+  // backoff: each lockout multiplies the duration by 2^(totalLockouts - 1).
+  // Unlike failedLoginCount this is NOT reset on unlock so the backoff
+  // curve keeps increasing across repeated lockout/unlock cycles.
+  @Exclude()
+  @Column({ type: 'int', default: 0 })
+  totalLockouts: number;
+
+  @Exclude()
+  @Column('datetime', { nullable: true })
+  lockedUntil: Date | null;
+
+  @Exclude()
+  @Column('datetime', { nullable: true })
+  lastFailedLoginAt: Date | null;
+
   // @Column({ default: true })
   // isActive: boolean;
 

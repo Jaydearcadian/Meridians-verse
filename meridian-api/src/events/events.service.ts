@@ -482,4 +482,86 @@ export class EventsService implements OnModuleInit {
       }
     }
   }
+
+  // --- Account lockout webhook (issue #650) ---
+
+  /**
+   * Fire a webhook when an account is locked due to repeated failed login
+   * attempts.  Subscribes to the "account.locked" contract action so
+   * external fraud-monitoring systems can react in real-time.
+   */
+  async fireAccountLockoutWebhook(params: {
+    userId: number;
+    email: string;
+    lockedUntil: Date;
+    failedLoginCount: number;
+    ip?: string;
+  }): Promise<void> {
+    const webhooks = await this.webhookRepo.find({
+      where: [
+        { isActive: true, contract: 'auth', action: 'account.locked' },
+        { isActive: true, contract: null as string, action: 'account.locked' },
+      ],
+    });
+
+    const payload = JSON.stringify({
+      event: 'account.locked',
+      userId: params.userId,
+      email: params.email,
+      lockedUntil: params.lockedUntil.toISOString(),
+      failedLoginCount: params.failedLoginCount,
+      ip: params.ip ?? null,
+      timestamp: new Date().toISOString(),
+    });
+
+    for (const wh of webhooks) {
+      try {
+        const secret = wh.encryptedData
+          ? await this.cryptoProvider.decrypt(wh.encryptedData)
+          : (wh.secret ?? '');
+
+        const signature = createHmac('sha256', secret)
+          .update(payload)
+          .digest('hex');
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+
+        const correlationId = this.correlationIdStore.get() ?? '';
+
+        const response = await fetch(wh.url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Webhook-Signature': signature,
+            'X-Webhook-Timestamp': Date.now().toString(),
+            [CORRELATION_ID_RESPONSE_HEADER]: correlationId,
+          },
+          body: payload,
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        if (response.ok) {
+          await this.webhookRepo.update(wh.id, {
+            lastTriggeredAt: new Date(),
+            failureCount: 0,
+          });
+        } else {
+          await this.webhookRepo.update(wh.id, {
+            failureCount: wh.failureCount + 1,
+            lastTriggeredAt: new Date(),
+          });
+        }
+      } catch (err) {
+        this.logger.error(
+          `Account lockout webhook delivery failed for ${wh.id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        await this.webhookRepo.update(wh.id, {
+          failureCount: wh.failureCount + 1,
+        });
+      }
+    }
+  }
 }

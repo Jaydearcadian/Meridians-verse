@@ -85,6 +85,22 @@ jest.mock(
   () => ({ RefreshTokenProvider: class RefreshTokenProvider {} }),
   { virtual: true },
 );
+jest.mock(
+  'src/auth/providers/lockout.service',
+  () => ({ LockoutService: class LockoutService {} }),
+  { virtual: true },
+);
+jest.mock(
+  'src/auth/exceptions/account-locked.exception',
+  () => ({
+    AccountLockedException: class AccountLockedException extends Error {
+      constructor(message?: string) {
+        super(message ?? 'Invalid credentials');
+      }
+    },
+  }),
+  { virtual: true },
+);
 
 // ----- Mail + common error -----
 jest.mock(

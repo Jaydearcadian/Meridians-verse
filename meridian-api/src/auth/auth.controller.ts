@@ -3,8 +3,11 @@ import {
   Controller,
   HttpCode,
   HttpStatus,
+  Logger,
   Post,
   Req,
+  Param,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { AuthService } from './providers/auth.service';
 import { SignInDto } from './dto/sign-in.dto';
@@ -20,12 +23,16 @@ import {
   ApiBearerAuth,
 } from '@nestjs/swagger';
 import { Public } from './decorators/public/public.decorator';
+import { RequireRoles } from './decorators/roles/roles.decorator';
+import { Role } from './enums/role.enum';
 import { REQUEST_USER_KEY } from './constant/auth-constant';
 import { Request } from 'express';
 
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(private readonly authService: AuthService) {}
 
   @Post('/sign-in')
@@ -40,10 +47,11 @@ export class AuthController {
   })
   @ApiResponse({
     status: 401,
-    description: 'Unauthorized / Invalid credentials',
+    description: 'Invalid credentials',
   })
-  public async signIn(@Body() signInDto: SignInDto) {
-    return this.authService.SignIn(signInDto);
+  public async signIn(@Body() signInDto: SignInDto, @Req() req: Request) {
+    const ip = req.ip ?? req.socket?.remoteAddress ?? 'unknown';
+    return this.authService.SignIn(signInDto, ip);
   }
 
   @Post('/refresh-token')
@@ -135,5 +143,42 @@ export class AuthController {
     @Body() resendVerificationDto: ResendVerificationDto,
   ) {
     return this.authService.resendVerification(resendVerificationDto.email);
+  }
+
+  // --- Account lockout (issue #650) ---
+
+  /**
+   * Admin-only endpoint to manually unlock a user account that has been
+   * locked due to repeated failed sign-in attempts.  Clears both the
+   * Redis failure counters and the DB-persisted lockout state.
+   */
+  @Post('/admin/unlock/:userId')
+  @RequireRoles(Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Admin: unlock a locked user account' })
+  @ApiResponse({
+    status: 200,
+    description: 'Account unlocked successfully',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden — admin role required',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'User not found',
+  })
+  public async adminUnlock(
+    @Param('userId', ParseIntPipe) userId: number,
+    @Req() req: Request,
+  ) {
+    const admin = req[REQUEST_USER_KEY] as { sub?: number; email?: string };
+
+    this.logger.log(
+      `Admin unlock: admin=${admin?.sub} target=${userId} ip=${req.ip}`,
+    );
+
+    return this.authService.adminUnlock(userId);
   }
 }

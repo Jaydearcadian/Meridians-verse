@@ -17,6 +17,7 @@ import {
 } from '../../rate-limit/rate-limit.constants';
 import { REQUEST_USER_KEY } from '../../auth/constant/auth-constant';
 import { ActiveUserData } from '../../auth/interfaces/active-user-data.interface';
+import { LockoutService } from '../../auth/providers/lockout.service';
 
 /** @nestjs/throttler v6 concatenates these with the named throttler key. */
 const THROTTLER_SKIP = 'THROTTLER:SKIP';
@@ -32,6 +33,7 @@ export class CustomThrottlerGuard implements CanActivate {
     private readonly rateLimits: RateLimitService,
     private readonly config: ConfigService,
     @Optional() private readonly jwtService?: JwtService,
+    @Optional() private readonly lockoutService?: LockoutService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -53,6 +55,18 @@ export class CustomThrottlerGuard implements CanActivate {
 
     if (this.isSkipped(handler, classRef, tier)) {
       return true;
+    }
+
+    // Account lockout gate (issue #650): for unauthenticated sign-in
+    // requests from a locked IP, skip the normal throttle check and reject
+    // immediately with a lockout-aware response.  Authenticated users
+    // (who have a userId) are handled by the SignInProviders lockout check.
+    if (this.lockoutService && isWrite) {
+      const ip = this.extractIp(req);
+      if (await this.lockoutService.isIpLocked(ip)) {
+        this.logger.warn(`IP ${ip} is locked — rejecting request before throttle`);
+        throw new ThrottlerException('Too Many Requests');
+      }
     }
 
     const routeLimit = this.reflector.getAllAndOverride<number>(
