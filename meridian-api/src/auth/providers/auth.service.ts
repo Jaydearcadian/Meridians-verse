@@ -6,6 +6,7 @@ import { SignInProviders } from './sign-in.providers';
 import { RefreshTokenDto } from '../dto/refresh-token-dto';
 import { RefreshTokenProvider } from './refreshToken.provider';
 import { VerifyEmailProvider } from './verify-email.provider';
+import { LockoutService } from './lockout.service';
 import { User } from 'src/users/user.entity';
 
 @Injectable()
@@ -22,13 +23,16 @@ export class AuthService {
     // when the recipient clicks the link from their signup mail.
     private readonly verifyEmailProvider: VerifyEmailProvider,
 
+    // Account lockout (issue #650): used by admin unlock endpoint.
+    private readonly lockoutService: LockoutService,
+
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
   ) {}
 
-  public async SignIn(signInDto: SignInDto) {
+  public async SignIn(signInDto: SignInDto, ip?: string) {
     // find user in database by email
-    return await this.signInProviders.SignIn(signInDto);
+    return await this.signInProviders.SignIn(signInDto, ip);
   }
 
   /**
@@ -87,5 +91,23 @@ export class AuthService {
 
   public async logoutAll(userId: number) {
     return await this.refreshTokenProvider.logoutAll(userId);
+  }
+
+  // --- Account lockout (issue #650) ---
+
+  /**
+   * Admin unlock: clears all lockout state (Redis + DB) for the given user.
+   * Called from POST /auth/admin/unlock.
+   */
+  public async adminUnlock(userId: number): Promise<{ message: string }> {
+    await this.lockoutService.adminUnlock(userId);
+    return { message: 'Account unlocked successfully' };
+  }
+
+  /**
+   * Check if a user account is currently locked (used by the throttle guard).
+   */
+  public async isAccountLocked(userId: number): Promise<boolean> {
+    return this.lockoutService.isAccountLocked(userId);
   }
 }

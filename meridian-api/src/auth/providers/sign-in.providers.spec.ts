@@ -16,6 +16,16 @@ jest.mock('./token.provider', () => ({
 jest.mock('../config/jwt.config', () => ({ default: { KEY: 'jwt' } }), {
   virtual: true,
 });
+jest.mock('./lockout.service', () => ({
+  LockoutService: class LockoutService {},
+}));
+jest.mock('../exceptions/account-locked.exception', () => ({
+  AccountLockedException: class AccountLockedException extends Error {
+    constructor(message?: string) {
+      super(message ?? 'Invalid credentials');
+    }
+  },
+}));
 
 import {
   ForbiddenException,
@@ -23,12 +33,18 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { SignInProviders } from './sign-in.providers';
+import { AccountLockedException } from '../exceptions/account-locked.exception';
 
 describe('SignInProviders', () => {
   let provider: SignInProviders;
   let userAuthFacade: { findUserByEmail: jest.Mock };
   let hashingProvider: { comparePassword: jest.Mock };
   let generateTokenProvider: { generateTokens: jest.Mock };
+  let lockoutService: {
+    isAccountLocked: jest.Mock;
+    recordFailedAttempt: jest.Mock;
+    clearOnSuccess: jest.Mock;
+  };
 
   // Default mock user is verified so the pre-existing password-paths below
   // continue to pass after the 403 verification gate was added
@@ -54,11 +70,21 @@ describe('SignInProviders', () => {
         jti: 'j',
       })),
     };
+    lockoutService = {
+      isAccountLocked: jest.fn(async () => false),
+      recordFailedAttempt: jest.fn(async () => ({
+        accountLocked: false,
+        ipLocked: false,
+        lockedUntil: null,
+      })),
+      clearOnSuccess: jest.fn(async () => undefined),
+    };
 
     provider = new SignInProviders(
       userAuthFacade as any,
       hashingProvider as any,
       generateTokenProvider as any,
+      lockoutService as any,
     );
   });
 
@@ -95,6 +121,46 @@ describe('SignInProviders', () => {
     await expect(
       provider.SignIn({ email: 'a@b.com', password: 'plain' } as any),
     ).rejects.toBeInstanceOf(RequestTimeoutException);
+  });
+
+  // --- Account lockout (issue #650) ---
+
+  it('throws AccountLockedException when the account is locked', async () => {
+    lockoutService.isAccountLocked.mockResolvedValueOnce(true);
+
+    await expect(
+      provider.SignIn({ email: 'a@b.com', password: 'plain' } as any),
+    ).rejects.toBeInstanceOf(AccountLockedException);
+    expect(hashingProvider.comparePassword).not.toHaveBeenCalled();
+  });
+
+  it('records a failed attempt when the password is wrong', async () => {
+    hashingProvider.comparePassword.mockResolvedValueOnce(false);
+
+    await expect(
+      provider.SignIn({ email: 'a@b.com', password: 'wrong' } as any),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(lockoutService.recordFailedAttempt).toHaveBeenCalledWith(
+      1,
+      'unknown',
+    );
+  });
+
+  it('clears counters on successful sign-in', async () => {
+    await provider.SignIn({ email: 'a@b.com', password: 'plain' } as any);
+    expect(lockoutService.clearOnSuccess).toHaveBeenCalledWith(1, 'unknown');
+  });
+
+  it('passes the IP address to recordFailedAttempt', async () => {
+    hashingProvider.comparePassword.mockResolvedValueOnce(false);
+
+    await expect(
+      provider.SignIn({ email: 'a@b.com', password: 'wrong' } as any, '192.168.1.1'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(lockoutService.recordFailedAttempt).toHaveBeenCalledWith(
+      1,
+      '192.168.1.1',
+    );
   });
 
   /**

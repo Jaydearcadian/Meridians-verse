@@ -18,6 +18,9 @@ jest.mock('./providers/token.provider', () => ({
 jest.mock('./providers/refreshToken.provider', () => ({
   RefreshTokenProvider: class RefreshTokenProvider {},
 }));
+jest.mock('./providers/lockout.service', () => ({
+  LockoutService: class LockoutService {},
+}));
 jest.mock('./entities/refresh-token.entity', () => ({
   RefreshToken: class RefreshToken {},
 }));
@@ -50,6 +53,7 @@ describe('AuthController (integration)', () => {
     RefreshToken: jest.Mock;
     logout: jest.Mock;
     logoutAll: jest.Mock;
+    adminUnlock: jest.Mock;
   };
 
   const buildMockGuard = (userPayload: { sub: number | string } | null) => {
@@ -77,6 +81,9 @@ describe('AuthController (integration)', () => {
       logout: jest.fn(async () => ({ message: 'Logged out successfully' })),
       logoutAll: jest.fn(async () => ({
         message: 'All sessions revoked successfully',
+      })),
+      adminUnlock: jest.fn(async () => ({
+        message: 'Account unlocked successfully',
       })),
     };
 
@@ -114,6 +121,7 @@ describe('AuthController (integration)', () => {
 
     expect(authService.SignIn).toHaveBeenCalledWith(
       expect.objectContaining(dto),
+      expect.any(String),
     );
   });
 
@@ -181,5 +189,24 @@ describe('AuthController (integration)', () => {
     await app.init();
 
     await request(app.getHttpServer()).post('/auth/logout-all').expect(500);
+  });
+
+  // --- Account lockout (issue #650) ---
+
+  it('POST /auth/admin/unlock/:userId unlocks the account and returns success', async () => {
+    await request(app.getHttpServer())
+      .post('/auth/admin/unlock/7')
+      .expect(200)
+      .expect((res) => {
+        expect(res.body.message).toBe('Account unlocked successfully');
+      });
+
+    expect(authService.adminUnlock).toHaveBeenCalledWith(7);
+  });
+
+  it('POST /auth/admin/unlock/:userId returns 400 for non-numeric userId', async () => {
+    await request(app.getHttpServer())
+      .post('/auth/admin/unlock/not-a-number')
+      .expect(400);
   });
 });

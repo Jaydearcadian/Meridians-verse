@@ -1,3 +1,10 @@
+jest.mock('../../auth/providers/lockout.service', () => ({
+  LockoutService: class LockoutService {},
+}));
+jest.mock('../../users/user.entity', () => ({ User: class User {} }), {
+  virtual: true,
+});
+
 import { ExecutionContext } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';

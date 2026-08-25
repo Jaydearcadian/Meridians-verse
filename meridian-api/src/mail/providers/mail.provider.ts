@@ -51,4 +51,24 @@ export class MailProvider {
       },
     });
   }
+
+  /**
+   * Account lockout notification (issue #650): informs the user that their
+   * account has been temporarily locked due to repeated failed sign-in
+   * attempts.  The email does NOT reveal the lockout duration or remaining
+   * time so the information cannot be abused.
+   */
+  public async AccountLockedEmail(user: User): Promise<void> {
+    await this.mailerService.sendMail({
+      to: user.email,
+      from: 'no-reply@estate-management.com',
+      subject: 'Your account has been temporarily locked',
+      template: './account-locked',
+      context: {
+        name: user.firstName,
+        email: user.email,
+        supportEmail: process.env.SUPPORT_EMAIL || 'support@estate-management.com',
+      },
+    });
+  }
 }
