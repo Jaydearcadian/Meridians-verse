@@ -1213,6 +1213,60 @@ mod zk_compliance {
             Ok(())
         }
 
+        // =====================================================================
+        // BATCH ENTRY POINTS
+        // =====================================================================
+
+        /// Submit multiple ZK proofs in a single call.
+        ///
+        /// Each element of `proofs` contains `(proof_type, public_inputs,
+        /// proof_data, metadata)` — mirroring the existing `submit_zk_proof`
+        /// entry point. All-or-nothing: first failure aborts the entire batch.
+        ///
+        /// Returns the count of proofs successfully submitted.
+        #[ink(message)]
+        pub fn batch_submit_zk_proofs(
+            &mut self,
+            proofs: Vec<(ZkProofType, Vec<[u8; 32]>, Vec<u8>, Vec<u8>)>,
+        ) -> Result<u32> {
+            if proofs.is_empty() {
+                return Err(Error::InvalidProof);
+            }
+            if proofs.len() > 20 {
+                return Err(Error::InvalidProof);
+            }
+            let count = proofs.len() as u32;
+            for (proof_type, public_inputs, proof_data, metadata) in proofs {
+                self.submit_zk_proof(proof_type, public_inputs, proof_data, metadata)?;
+            }
+            Ok(count)
+        }
+
+        /// Verify multiple ZK proofs in a single call.
+        ///
+        /// Each element is `(account, proof_id, approve)` — mirroring the
+        /// existing `verify_zk_proof` entry point.
+        /// Returns a vector of `(proof_id, verified: bool)` outcomes. Does NOT
+        /// short-circuit on failure; all items are attempted.
+        #[ink(message)]
+        pub fn batch_verify_zk_proofs(
+            &mut self,
+            verifications: Vec<(AccountId, u64, bool)>,
+        ) -> Result<Vec<(u64, bool)>> {
+            if verifications.is_empty() {
+                return Err(Error::InvalidProof);
+            }
+            if verifications.len() > 20 {
+                return Err(Error::InvalidProof);
+            }
+            let mut results = Vec::new();
+            for (account, proof_id, approve) in verifications {
+                let ok = self.verify_zk_proof(account, proof_id, approve).is_ok();
+                results.push((proof_id, ok));
+            }
+            Ok(results)
+        }
+
         // --- Internal helper functions ---
         /// Validate proof data using the configured ZK backend.
         ///

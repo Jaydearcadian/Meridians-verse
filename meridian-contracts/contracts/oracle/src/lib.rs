@@ -866,6 +866,65 @@ mod propchain_oracle {
             Ok(())
         }
 
+        /// Add multiple oracle sources in a single call (admin only).
+        ///
+        /// All-or-nothing: returns early with the first error encountered.
+        /// Returns the count of sources successfully added.
+        #[ink(message)]
+        pub fn add_oracle_sources_batch(
+            &mut self,
+            sources: Vec<OracleSource>,
+        ) -> Result<u32, OracleError> {
+            self.ensure_admin()?;
+            if sources.is_empty() {
+                return Err(OracleError::InvalidParameters);
+            }
+            if sources.len() > 50 {
+                return Err(OracleError::InvalidParameters);
+            }
+            let mut count = 0u32;
+            for source in sources {
+                if source.weight > 100 {
+                    return Err(OracleError::InvalidParameters);
+                }
+                self.oracle_sources.insert(&source.id, &source);
+                if source.is_active && !self.active_sources.contains(&source.id) {
+                    self.active_sources.push(source.id.clone());
+                }
+                self.env().emit_event(OracleSourceAdded {
+                    source_id: source.id,
+                    source_type: source.source_type,
+                    weight: source.weight,
+                });
+                count += 1;
+            }
+            Ok(count)
+        }
+
+        /// Update reputations for multiple oracle sources in a single call (admin only).
+        ///
+        /// Each element is `(source_id, success_flag)`.
+        /// Returns the count of updates applied.
+        #[ink(message)]
+        pub fn update_source_reputation_batch(
+            &mut self,
+            updates: Vec<(String, bool)>,
+        ) -> Result<u32, OracleError> {
+            self.ensure_admin()?;
+            if updates.is_empty() {
+                return Err(OracleError::InvalidParameters);
+            }
+            if updates.len() > 50 {
+                return Err(OracleError::InvalidParameters);
+            }
+            let mut count = 0u32;
+            for (source_id, success) in updates {
+                self.update_source_reputation(source_id, success)?;
+                count += 1;
+            }
+            Ok(count)
+        }
+
         /// Set location adjustment factor (admin only)
         #[ink(message)]
         pub fn set_location_adjustment(

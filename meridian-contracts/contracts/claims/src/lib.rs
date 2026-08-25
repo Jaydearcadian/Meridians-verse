@@ -276,6 +276,100 @@ impl ClaimsContract {
         );
     }
 
+    // =========================================================================
+    // BATCH ENTRY POINTS
+    // =========================================================================
+
+    /// Submit multiple claims in a single transaction (all-or-nothing).
+    ///
+    /// Each element of `requests` is `(policy_id, amount)`.  All validations
+    /// from `submit_claim` apply; if any item fails the entire batch is rolled
+    /// back via panic.
+    pub fn submit_claims_batch(
+        env: Env,
+        requests: soroban_sdk::Vec<(u64, i128)>,
+    ) -> soroban_sdk::Vec<u64> {
+        if requests.is_empty() {
+            panic!("Batch is empty");
+        }
+        if requests.len() > 50 {
+            panic!("Batch exceeds maximum size of 50");
+        }
+
+        let policy_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PolicyContract)
+            .unwrap();
+
+        let mut ids: soroban_sdk::Vec<u64> = soroban_sdk::Vec::new(&env);
+
+        for i in 0..requests.len() {
+            let (policy_id, amount) = requests.get(i).unwrap();
+
+            let is_active: bool = env.invoke_contract(
+                &policy_contract,
+                &symbol_short!("is_active"),
+                soroban_sdk::vec![&env, policy_id.into_val(&env)],
+            );
+            if !is_active {
+                panic!("Batch item: policy not active or expired");
+            }
+
+            let policy: InsurancePolicy = env.invoke_contract(
+                &policy_contract,
+                &symbol_short!("get_pol"),
+                soroban_sdk::vec![&env, policy_id.into_val(&env)],
+            );
+
+            if amount <= 0 || (amount + policy.total_claimed) > policy.coverage_amount {
+                panic!("Batch item: claim amount invalid or exceeds coverage");
+            }
+
+            if env
+                .storage()
+                .persistent()
+                .has(&DataKey::PolicyActiveClaim(policy_id))
+            {
+                panic!("Batch item: policy already has an active claim");
+            }
+
+            let claimant = policy.holder.clone();
+            claimant.require_auth();
+
+            let mut counter = get_claim_counter(&env);
+            counter += 1;
+            env.storage()
+                .instance()
+                .set(&DataKey::ClaimCounter, &counter);
+
+            let claim = InsuranceClaim {
+                claim_id: counter,
+                policy_id,
+                claimant: claimant.clone(),
+                amount,
+                status: ClaimStatus::Submitted,
+                submitted_at: env.ledger().timestamp(),
+            };
+
+            set_claim(&env, counter, &claim);
+            env.storage()
+                .persistent()
+                .set(&DataKey::PolicyActiveClaim(policy_id), &counter);
+
+            ids.push_back(counter);
+        }
+
+        emit_event_with(
+            &env,
+            symbol_short!("CLAIMS"),
+            symbol_short!("BTCHSUB"),
+            &(ids.len() as u32),
+        );
+
+        ids
+    }
+
     pub fn get_claim(env: Env, claim_id: u64) -> InsuranceClaim {
         get_claim_inner(&env, claim_id)
     }

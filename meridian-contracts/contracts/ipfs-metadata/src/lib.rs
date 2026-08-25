@@ -825,6 +825,78 @@ mod ipfs_metadata {
         // ADMIN FUNCTIONS
         // ============================================================================
 
+        // =====================================================================
+        // BATCH ENTRY POINTS
+        // =====================================================================
+
+        /// Register multiple IPFS documents in a single call.
+        ///
+        /// Each element of `documents` bundles all parameters of
+        /// `register_ipfs_document`. All-or-nothing: first failure rolls back.
+        /// Returns the vector of newly assigned document IDs.
+        #[ink(message)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn register_ipfs_documents_batch(
+            &mut self,
+            documents: Vec<(
+                u64,           // property_id
+                String,        // ipfs_cid
+                DocumentType,  // document_type
+                Hash,          // content_hash
+                u64,           // file_size
+                String,        // mime_type
+                bool,          // is_encrypted
+            )>,
+        ) -> Result<Vec<u64>, Error> {
+            if documents.is_empty() {
+                return Err(Error::InvalidMetadata);
+            }
+            if documents.len() > 50 {
+                return Err(Error::SizeLimitExceeded);
+            }
+            let mut ids = Vec::new();
+            for (property_id, ipfs_cid, document_type, content_hash, file_size, mime_type, is_encrypted) in documents {
+                let doc_id = self.register_ipfs_document(
+                    property_id,
+                    ipfs_cid,
+                    document_type,
+                    content_hash,
+                    file_size,
+                    mime_type,
+                    is_encrypted,
+                )?;
+                ids.push(doc_id);
+            }
+            Ok(ids)
+        }
+
+        /// Verify content hashes for multiple documents in a single call.
+        ///
+        /// Each element is `(document_id, provided_hash)`. Returns a vector of
+        /// `(document_id, is_valid)` outcomes. Does NOT short-circuit on failure;
+        /// all items are attempted.
+        #[ink(message)]
+        pub fn verify_content_hash_batch(
+            &mut self,
+            verifications: Vec<(u64, Hash)>,
+        ) -> Vec<(u64, bool)> {
+            if verifications.is_empty() {
+                return Vec::new();
+            }
+            let capped = if verifications.len() > 50 {
+                50
+            } else {
+                verifications.len()
+            };
+            let mut results = Vec::new();
+            for i in 0..capped {
+                let (document_id, provided_hash) = verifications[i].clone();
+                let ok = self.verify_content_hash(document_id, provided_hash).unwrap_or(false);
+                results.push((document_id, ok));
+            }
+            results
+        }
+
         /// Updates validation rules (admin only)
         #[ink(message)]
         pub fn update_validation_rules(&mut self, rules: ValidationRules) -> Result<(), Error> {

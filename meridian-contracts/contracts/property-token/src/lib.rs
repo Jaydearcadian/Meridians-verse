@@ -802,6 +802,60 @@ mod property_token {
             Ok(())
         }
 
+        // =====================================================================
+        // ADDITIONAL BATCH ENTRY POINTS
+        // =====================================================================
+
+        /// Batch-issue shares for multiple tokens/accounts.
+        ///
+        /// Each element of `requests` is `(token_id, recipient, share_amount)`.
+        /// Admin-only. All-or-nothing: first failure aborts the batch.
+        /// Returns the count of successful issuances.
+        #[ink(message)]
+        pub fn issue_shares_batch(
+            &mut self,
+            requests: Vec<(TokenId, AccountId, u128)>,
+        ) -> Result<u32, Error> {
+            self.ensure_admin()?;
+            if requests.is_empty() {
+                return Err(Error::InvalidParameters);
+            }
+            if requests.len() > 50 {
+                return Err(Error::InvalidParameters);
+            }
+            let mut count = 0u32;
+            for (token_id, recipient, amount) in &requests {
+                self.issue_shares(*token_id, *recipient, *amount)?;
+                count += 1;
+            }
+            Ok(count)
+        }
+
+        /// Batch-place asks for multiple tokens.
+        ///
+        /// Each element of `asks` is `(token_id, price_per_share, share_amount)`.
+        /// Caller must own sufficient shares for each ask.
+        /// All-or-nothing: first failure aborts the batch.
+        /// Returns the count of asks placed.
+        #[ink(message)]
+        pub fn place_ask_batch(
+            &mut self,
+            asks: Vec<(TokenId, u128, u128)>,
+        ) -> Result<u32, Error> {
+            if asks.is_empty() {
+                return Err(Error::InvalidParameters);
+            }
+            if asks.len() > 50 {
+                return Err(Error::InvalidParameters);
+            }
+            let mut count = 0u32;
+            for (token_id, price_per_share, share_amount) in asks {
+                self.place_ask(token_id, price_per_share, share_amount)?;
+                count += 1;
+            }
+            Ok(count)
+        }
+
         /// ERC-1155: Returns the URI for a token
         #[ink(message)]
         pub fn uri(&self, token_id: TokenId) -> Option<String> {

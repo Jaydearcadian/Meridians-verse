@@ -360,6 +360,171 @@ impl PolicyContract {
     pub fn update_cl(env: Env, policy_id: u64, amount: i128) {
         Self::update_claimed(env, policy_id, amount)
     }
+
+    // =========================================================================
+    // BATCH ENTRY POINTS
+    // =========================================================================
+
+    /// Issue multiple policies in a single transaction (all-or-nothing).
+    ///
+    /// Each element of `requests` is a tuple `(holder, coverage_amount,
+    /// premium_amount, duration_days, policy_type)`.  The call fails atomically
+    /// if any individual issue would fail (e.g. DAO limits exceeded).
+    ///
+    /// Returns a `Vec<u64>` of the newly assigned policy IDs in order.
+    pub fn issue_policies_batch(
+        env: Env,
+        requests: soroban_sdk::Vec<(
+            Address,
+            i128,
+            i128,
+            u32,
+            PolicyType,
+        )>,
+    ) -> soroban_sdk::Vec<u64> {
+        let caller = env.current_contract_address();
+        access_control::require_role(&env, &caller, &AccessControlRole::Admin);
+
+        if requests.is_empty() {
+            panic!("Batch is empty");
+        }
+        if requests.len() > 50 {
+            panic!("Batch exceeds maximum size of 50");
+        }
+
+        let params = policy_params_or_default(&env);
+        let mut ids: soroban_sdk::Vec<u64> = soroban_sdk::Vec::new(&env);
+
+        for i in 0..requests.len() {
+            let (holder, coverage_amount, premium_amount, duration_days, policy_type) =
+                requests.get(i).unwrap();
+
+            if coverage_amount > params.max_coverage_amount {
+                panic!("Batch item {}: coverage exceeds DAO maximum");
+            }
+            if premium_amount < params.min_premium_amount {
+                panic!("Batch item {}: premium below DAO minimum");
+            }
+
+            let mut counter = get_policy_counter(&env);
+            counter += 1;
+            env.storage()
+                .instance()
+                .set(&DataKey::PolicyCounter, &counter);
+
+            let risk_pool: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::RiskPool)
+                .unwrap_or_else(|| panic!("Contract not initialized"));
+
+            let policy = InsurancePolicy {
+                policy_id: counter,
+                holder: holder.clone(),
+                coverage_amount,
+                premium_amount,
+                start_time: env.ledger().timestamp(),
+                duration_days,
+                policy_type,
+                status: PolicyStatus::Active,
+                risk_pool,
+                total_claimed: 0,
+            };
+
+            set_policy(&env, counter, &policy);
+            ids.push_back(counter);
+        }
+
+        // Emit single batch event with count + first/last policy IDs.
+        let first_id = ids.get(0).unwrap_or(0);
+        let last_id = ids.get(ids.len().saturating_sub(1)).unwrap_or(0);
+        emit_event_with(
+            &env,
+            symbol_short!("POLICY"),
+            symbol_short!("BTCHISS"),
+            &(ids.len(), first_id, last_id),
+        );
+
+        ids
+    }
+
+    /// Renew multiple policies in a single transaction (all-or-nothing).
+    ///
+    /// Each element of `requests` is `(policy_id, additional_duration_days)`.
+    pub fn renew_policies_batch(
+        env: Env,
+        requests: soroban_sdk::Vec<(u64, u32)>,
+    ) {
+        if requests.is_empty() {
+            panic!("Batch is empty");
+        }
+        if requests.len() > 50 {
+            panic!("Batch exceeds maximum size of 50");
+        }
+
+        let now = env.ledger().timestamp();
+
+        for i in 0..requests.len() {
+            let (policy_id, duration_days) = requests.get(i).unwrap();
+            let mut policy = get_policy_inner(&env, policy_id);
+            policy.holder.require_auth();
+
+            if policy.status != PolicyStatus::Active && policy.status != PolicyStatus::Renewed {
+                panic!("Batch item: policy not active");
+            }
+            let expiry = policy.start_time + (policy.duration_days as u64 * 86400);
+            if now > expiry {
+                panic!("Batch item: policy has expired");
+            }
+
+            policy.duration_days += duration_days;
+            policy.status = PolicyStatus::Renewed;
+            set_policy(&env, policy_id, &policy);
+        }
+
+        emit_event_with(
+            &env,
+            symbol_short!("POLICY"),
+            symbol_short!("BTCHRN"),
+            &(requests.len() as u32),
+        );
+    }
+
+    /// Cancel multiple policies in a single transaction (all-or-nothing).
+    pub fn cancel_policies_batch(
+        env: Env,
+        policy_ids: soroban_sdk::Vec<u64>,
+    ) {
+        if policy_ids.is_empty() {
+            panic!("Batch is empty");
+        }
+        if policy_ids.len() > 50 {
+            panic!("Batch exceeds maximum size of 50");
+        }
+
+        let now = env.ledger().timestamp();
+
+        for i in 0..policy_ids.len() {
+            let policy_id = policy_ids.get(i).unwrap();
+            let mut policy = get_policy_inner(&env, policy_id);
+            policy.holder.require_auth();
+
+            let expiry = policy.start_time + (policy.duration_days as u64 * 86400);
+            if now > expiry {
+                panic!("Batch item: policy already expired");
+            }
+
+            policy.status = PolicyStatus::Cancelled;
+            set_policy(&env, policy_id, &policy);
+        }
+
+        emit_event_with(
+            &env,
+            symbol_short!("POLICY"),
+            symbol_short!("BTCHCNL"),
+            &(policy_ids.len() as u32),
+        );
+    }
 }
 
 #[cfg(test)]
