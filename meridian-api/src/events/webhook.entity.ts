@@ -51,6 +51,23 @@ export class Webhook {
   @Column({ type: 'timestamp', nullable: true })
   lastTriggeredAt: Date | null;
 
+  // Async delivery / retry state (issue #661). `retryCount` is the number of
+  // delivery attempts in the current retry cycle, `nextRetryAt` is when the
+  // next attempt is due, `dlqAt` is set once the webhook is dead-lettered after
+  // exhausting retries, and `lastError` records the most recent failure reason.
+  @Column({ type: 'int', default: 0 })
+  retryCount: number;
+
+  @Column({ type: 'timestamp', nullable: true })
+  nextRetryAt: Date | null;
+
+  @Index()
+  @Column({ type: 'timestamp', nullable: true })
+  dlqAt: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  lastError: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

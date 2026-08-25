@@ -1,14 +1,14 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan, FindOptionsWhere } from 'typeorm';
-import { createHash, randomBytes, createHmac } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { AuditLog, AuditAction } from '../audit/audit-log.entity';
 import { AuditService } from '../audit/audit.service';
 import { Webhook } from './webhook.entity';
 import { LeaderboardProofService } from '../leaderboard/leaderboard-proof.service';
 import { CryptoProvider } from 'src/crypto/providers/crypto.provider';
 import { CorrelationIdStore } from '../common/correlation/correlation-id.store';
-import { CORRELATION_ID_RESPONSE_HEADER } from '../common/correlation/correlation-id.constants';
+import { WebhookQueueService } from './webhook-queue.service';
 
 export interface ContractEvent {
   txHash: string;
@@ -50,6 +50,10 @@ export class EventsService implements OnModuleInit {
     // rest and only decrypted in-memory at delivery time.
     private readonly cryptoProvider: CryptoProvider,
     private readonly correlationIdStore: CorrelationIdStore,
+
+    // Async webhook delivery (issue #661): deliveries are handed to a queue so
+    // a slow subscriber never blocks event ingestion.
+    private readonly webhookQueue: WebhookQueueService,
   ) {}
 
   onModuleInit(): void {
@@ -395,91 +399,16 @@ export class EventsService implements OnModuleInit {
     return p1 + p2;
   }
 
+  /**
+   * Hand webhook delivery to the async queue (issue #661) instead of calling
+   * `fetch` inline, so a slow or failing subscriber never blocks ingestion.
+   * Retries with exponential backoff + jitter and DLQ promotion are handled by
+   * {@link WebhookQueueService}.
+   */
   private async deliverWebhooks(
     event: ContractEvent,
     auditEntry: AuditLog,
   ): Promise<void> {
-    const webhooks = await this.webhookRepo.find({
-      where: [
-        { isActive: true, contract: event.contract, action: event.action },
-        { isActive: true, contract: event.contract, action: null as string },
-        { isActive: true, contract: null as string, action: null as string },
-      ],
-    });
-
-    for (const wh of webhooks) {
-      if (wh.address && event.address && wh.address !== event.address) continue;
-
-      try {
-        // Resolve the signing secret: decrypt the envelope for new rows,
-        // fall back to the legacy plaintext column for pre-migration rows.
-        const secret = wh.encryptedData
-          ? await this.cryptoProvider.decrypt(wh.encryptedData)
-          : (wh.secret ?? '');
-
-        const payload = JSON.stringify({
-          txHash: event.txHash,
-          contract: event.contract,
-          action: event.action,
-          blockNumber: event.blockNumber,
-          data: event.data || {},
-          auditId: auditEntry.id,
-          chainHash: auditEntry.chainHash,
-          timestamp: new Date().toISOString(),
-        });
-
-        const signature = createHmac('sha256', secret)
-          .update(payload)
-          .digest('hex');
-
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5000);
-
-        const correlationId =
-          auditEntry.correlationId ?? this.correlationIdStore.get() ?? '';
-
-        const response = await fetch(wh.url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Webhook-Signature': signature,
-            'X-Webhook-Timestamp': Date.now().toString(),
-            [CORRELATION_ID_RESPONSE_HEADER]: correlationId,
-          },
-          body: payload,
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeout);
-
-        if (response.ok) {
-          await this.webhookRepo.update(wh.id, {
-            lastTriggeredAt: new Date(),
-            failureCount: 0,
-          });
-        } else {
-          await this.webhookRepo.update(wh.id, {
-            failureCount: wh.failureCount + 1,
-            lastTriggeredAt: new Date(),
-          });
-          if (wh.failureCount + 1 >= 10) {
-            await this.webhookRepo.update(wh.id, { isActive: false });
-            this.logger.warn(
-              `Webhook ${wh.id} deactivated after ${wh.failureCount + 1} failures`,
-            );
-          }
-        }
-      } catch (err) {
-        this.logger.error(
-          `Webhook delivery failed for ${wh.id}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        await this.webhookRepo.update(wh.id, {
-          failureCount: wh.failureCount + 1,
-        });
-        if (wh.failureCount + 1 >= 10) {
-          await this.webhookRepo.update(wh.id, { isActive: false });
-        }
-      }
-    }
+    await this.webhookQueue.enqueueForEvent(event, auditEntry);
   }
 }
