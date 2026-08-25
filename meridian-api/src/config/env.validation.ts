@@ -83,6 +83,12 @@ export const envValidationSchema = Joi.object({
   RATE_LIMIT_ABUSE_WINDOW_MS: Joi.number().integer().positive().default(60000),
   RATE_LIMIT_ABUSE_FACTOR: Joi.number().min(0.1).max(1).default(0.5),
 
+  // Async webhook delivery queue (issue #661): retry ceiling, exponential
+  // backoff base, and how long dead letters are retained before purging.
+  WEBHOOK_RETRY_MAX: Joi.number().integer().positive().default(5),
+  WEBHOOK_BACKOFF_BASE_MS: Joi.number().integer().positive().default(1000),
+  WEBHOOK_DLQ_TTL_DAYS: Joi.number().integer().positive().default(7),
+
   // Envelope encryption (issue #631): the master Key Encryption Key (KEK)
   // that wraps per-user Data Encryption Keys. Provide either the raw
   // base64-encoded 32-byte key or a URL that returns { "key": "<base64>" }.
