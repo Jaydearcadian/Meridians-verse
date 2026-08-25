@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ValidationPipe, VersioningType } from '@nestjs/common';
+import { ValidationPipe, VersioningType, Logger } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { DataResponseInterceptor } from './common/interceptors/data-response.interceptor';
@@ -111,6 +111,53 @@ async function bootstrap() {
   app.useGlobalInterceptors(new DataResponseInterceptor());
 
   await app.listen(process.env.PORT ?? 3000);
+
+  // Graceful shutdown handling
+  setupGracefulShutdown(app);
+}
+
+/**
+ * Setup graceful shutdown handlers for SIGTERM and SIGINT
+ * Ensures database connections are properly drained before shutdown
+ */
+function setupGracefulShutdown(app: any) {
+  const logger = new Logger('GracefulShutdown');
+
+  const shutdown = async (signal: string) => {
+    logger.log(`Received ${signal}. Starting graceful shutdown...`);
+
+    try {
+      // Stop accepting new connections
+      await app.close();
+      logger.log('HTTP server closed');
+
+      // TypeORM will automatically close connections when the app closes
+      // due to the OnModuleDestroy lifecycle hook in services
+      logger.log('Graceful shutdown completed');
+      process.exit(0);
+    } catch (error) {
+      logger.error(`Error during graceful shutdown: ${error}`);
+      process.exit(1);
+    }
+  };
+
+  // Handle SIGTERM (Kubernetes, Railway, Docker)
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+  // Handle SIGINT (Ctrl+C)
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
+  // Handle uncaught exceptions
+  process.on('uncaughtException', (error) => {
+    logger.error(`Uncaught exception: ${error}`);
+    shutdown('UNCAUGHT_EXCEPTION');
+  });
+
+  // Handle unhandled promise rejections
+  process.on('unhandledRejection', (reason, promise) => {
+    logger.error(`Unhandled rejection at ${promise}: ${reason}`);
+    shutdown('UNHANDLED_REJECTION');
+  });
 }
 
 bootstrap();

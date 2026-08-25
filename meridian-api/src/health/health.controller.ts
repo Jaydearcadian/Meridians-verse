@@ -9,6 +9,7 @@ import {
 } from '@nestjs/terminus';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { Public } from 'src/auth/decorators/public/public.decorator';
+import { PoolMonitoringService } from './pool-monitoring.service';
 
 @SkipThrottle()
 @Public()
@@ -20,6 +21,7 @@ export class HealthController {
     private db: TypeOrmHealthIndicator,
     private memory: MemoryHealthIndicator,
     private disk: DiskHealthIndicator,
+    private poolMonitoring: PoolMonitoringService,
   ) {}
 
   @Get()
@@ -37,6 +39,34 @@ export class HealthController {
           path: '/',
           thresholdPercent: 0.95,
         }),
+      () => this.checkPoolHealth(),
     ]);
+  }
+
+  /**
+   * Check database connection pool health
+   * Fails if waiting connections exceed threshold (default: 10)
+   */
+  checkPoolHealth() {
+    const metrics = this.poolMonitoring.getCurrentMetrics();
+    const threshold = 10;
+
+    if (metrics.waitingConnections >= threshold) {
+      throw new Error(
+        `Connection pool unhealthy: ${metrics.waitingConnections} clients waiting for connections (threshold: ${threshold})`,
+      );
+    }
+
+    return {
+      database_pool: {
+        status: 'up' as const,
+        details: {
+          activeConnections: metrics.activeConnections,
+          idleConnections: metrics.idleConnections,
+          waitingConnections: metrics.waitingConnections,
+          saturation: (metrics.saturation * 100).toFixed(1) + '%',
+        },
+      },
+    };
   }
 }
