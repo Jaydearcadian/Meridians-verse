@@ -1,6 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
+use stellar_insured_lib::abi_dispatch::{init_abi, read_own_abi, POLICY_V1};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 use stellar_insured_lib::events::emit_event_with;
 use stellar_insured_lib::state_root::get_state_root;
@@ -18,6 +19,8 @@ pub enum DataKey {
     PolicyParams,
     Policy(u64),
     PolicyCounter,
+    /// ABI version registry — packed (min, current) stored by init_abi.
+    AbiVersions,
 }
 
 // #609: default parameters used until the DAO sets its own via
@@ -74,6 +77,8 @@ impl PolicyContract {
         env.storage().instance().set(&DataKey::RiskPool, &risk_pool);
         env.storage().instance().set(&DataKey::PolicyCounter, &0u64);
         access_control::init_access_control(&env, &admin);
+        // Register ABI version so callers can negotiate compatibility.
+        init_abi(&env, POLICY_V1, POLICY_V1);
     }
 
     pub fn set_role(env: Env, addr: Address, role: AccessControlRole) {
@@ -355,6 +360,14 @@ impl PolicyContract {
 
     pub fn get_stats(env: Env) -> u64 {
         get_policy_counter(&env)
+    }
+
+    /// Return the `(min_packed, current_packed)` ABI version range.
+    ///
+    /// Queried by callers via `check_abi` before any cross-contract call so
+    /// mismatched entry points are caught at call time, not silently.
+    pub fn get_supported_abis(env: Env) -> (u32, u32) {
+        read_own_abi(&env)
     }
 
     pub fn update_cl(env: Env, policy_id: u64, amount: i128) {

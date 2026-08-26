@@ -2,6 +2,7 @@
 
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
+use stellar_insured_lib::abi_dispatch::{init_abi, read_own_abi, RISK_POOL_V1, RISK_POOL_V2};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 use stellar_insured_lib::events::emit_event_with;
 use stellar_insured_lib::state_root::{
@@ -24,6 +25,8 @@ pub enum DataKey {
     ProviderStake(Address),
     Version,
     LockedCapital,
+    /// ABI version registry — packed (min, current) stored by init_abi.
+    AbiVersions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -129,6 +132,9 @@ impl RiskPoolContract {
             .set(&DataKey::LockedCapital, &0i128);
         access_control::init_access_control(&env, &admin);
         refresh_state_root(&env);
+        // Register ABI version. The pool starts at V1 (1.0); after the V2
+        // storage migration min stays at 1.0 so old callers still work.
+        init_abi(&env, RISK_POOL_V1, RISK_POOL_V1);
         Ok(())
     }
 
@@ -290,6 +296,11 @@ impl RiskPoolContract {
     /// pure reallocation and moves no tokens.
     ///
     /// Gated on the `Governance` role, mirroring `payout_claim`'s role check.
+    /// Alias used by Governance and Claims cross-contract calls (`payout`).
+    pub fn payout(env: Env, recipient: Address, amount: i128) -> Result<(), RiskPoolError> {
+        Self::payout_claim(env, recipient, amount)
+    }
+
     pub fn absorb_slash(env: Env, target: Address, amount: i128) -> Result<(), RiskPoolError> {
         let caller = env.current_contract_address();
         access_control::require_role(&env, &caller, &AccessControlRole::Governance);
@@ -337,12 +348,26 @@ impl RiskPoolContract {
         }
     }
 
+    /// Alias used by the Claims contract cross-contract call (`get_stats`).
+    pub fn get_stats(env: Env) -> PoolStats {
+        Self::get_pool_stats(env)
+    }
+
     pub fn get_provider_info(env: Env, provider: Address) -> i128 {
         get_provider_stake(&env, &provider)
     }
 
     pub fn get_state_root(env: Env) -> soroban_sdk::BytesN<32> {
         read_state_root(&env)
+    }
+
+    /// Return the `(min_packed, current_packed)` ABI version range.
+    ///
+    /// After the V2 storage migration the current version is bumped to 1.1
+    /// (RISK_POOL_V2) while min stays at 1.0 so backward-compatible callers
+    /// keep working.
+    pub fn get_supported_abis(env: Env) -> (u32, u32) {
+        read_own_abi(&env)
     }
 
     pub fn migrate(
@@ -380,6 +405,9 @@ impl RiskPoolContract {
                     .instance()
                     .set(&DataKey::Version, &StorageVersion::V2);
                 refresh_state_root(&env);
+                // Bump current ABI to V2 (1.1); min stays at V1 (1.0) so
+                // existing callers remain compatible.
+                init_abi(&env, RISK_POOL_V1, RISK_POOL_V2);
             }
             _ => return Err(RiskPoolError::AlreadyInitialized),
         }

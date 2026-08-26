@@ -3,6 +3,8 @@
 //! Shared contracts library with common reusable primitives.
 
 #[cfg(feature = "soroban")]
+pub mod abi_dispatch;
+#[cfg(feature = "soroban")]
 pub mod access_control;
 pub mod circuit_breaker;
 #[cfg(any(feature = "soroban", feature = "ink"))]

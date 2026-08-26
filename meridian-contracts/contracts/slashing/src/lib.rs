@@ -3,6 +3,7 @@
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol, Vec,
 };
+use stellar_insured_lib::abi_dispatch::{init_abi, read_own_abi, SLASHING_V1};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 use stellar_insured_lib::circuit_breaker;
 use stellar_insured_lib::events::emit_event_with;
@@ -21,6 +22,8 @@ pub enum DataKey {
     ViolationCount(Address, Symbol),
     History(Address, Symbol),
     SlashableRoles,
+    /// ABI version registry — packed (min, current) stored by init_abi.
+    AbiVersions,
 }
 
 #[contracttype]
@@ -96,6 +99,8 @@ impl SlashingContract {
         access_control::init_access_control(&env, &admin);
         access_control::set_role(&env, &admin, &governance, AccessControlRole::Governance);
         circuit_breaker::init(&env);
+        // Register ABI version.
+        init_abi(&env, SLASHING_V1, SLASHING_V1);
 
         emit_event_with(
             &env,
@@ -262,6 +267,11 @@ impl SlashingContract {
 
     pub fn get_state_root(env: Env) -> soroban_sdk::BytesN<32> {
         get_state_root(&env)
+    }
+
+    /// Return the `(min_packed, current_packed)` ABI version range.
+    pub fn get_supported_abis(env: Env) -> (u32, u32) {
+        read_own_abi(&env)
     }
 
     pub fn get_violation_count(env: Env, target: Address, role: Symbol) -> u32 {
