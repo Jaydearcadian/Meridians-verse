@@ -8,6 +8,7 @@ mod validation;
 mod migration_test;
 
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
+use stellar_insured_lib::abi_dispatch::{init_abi, read_own_abi, ESCROW_V1, ESCROW_V2};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 use stellar_insured_lib::circuit_breaker;
 use stellar_insured_lib::events::emit_event_with;
@@ -43,6 +44,8 @@ impl AdvancedEscrow {
 
         access_control::init_access_control(&env, &admin);
         circuit_breaker::init(&env);
+        // Register ABI version.
+        init_abi(&env, ESCROW_V1, ESCROW_V1);
 
         emit_event_with(&env, symbol_short!("ESCROW"), symbol_short!("INIT"), &admin);
         Ok(())
@@ -446,6 +449,9 @@ impl AdvancedEscrow {
                 env.storage()
                     .instance()
                     .set(&DataKey::Version, &StorageVersion::V2);
+                // Bump current ABI to V2 (1.1); min stays at V1 (1.0) so
+                // existing callers remain compatible.
+                init_abi(&env, ESCROW_V1, ESCROW_V2);
             }
             _ => return Err(EscrowError::InvalidStatus),
         }
@@ -471,6 +477,11 @@ impl AdvancedEscrow {
 
     pub fn get_state_root(env: Env) -> soroban_sdk::BytesN<32> {
         get_state_root(&env)
+    }
+
+    /// Return the `(min_packed, current_packed)` ABI version range.
+    pub fn get_supported_abis(env: Env) -> (u32, u32) {
+        read_own_abi(&env)
     }
 
     pub fn get_fee_bps(env: Env) -> u32 {

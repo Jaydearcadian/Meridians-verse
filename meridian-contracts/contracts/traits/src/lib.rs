@@ -2,6 +2,7 @@
 
 //! Shared trait and error definitions used across PropChain contracts.
 
+pub mod abi;
 
 use ink::prelude::string::String;
 use ink::primitives::{AccountId, Hash};

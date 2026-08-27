@@ -3,6 +3,10 @@
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, String, Symbol, Vec,
 };
+use stellar_insured_lib::abi_dispatch::{
+    check_abi, init_abi, read_own_abi, CLAIMS_V1, GOVERNANCE_V1, POLICY_V1, RISK_POOL_V1,
+    SLASHING_V1,
+};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 use stellar_insured_lib::events::emit_event_with;
 use stellar_insured_lib::state_root::get_state_root;
@@ -22,6 +26,8 @@ pub enum DataKey {
     VoterRecord(u64, Address),
     VotingPeriod,
     GovernanceActionPending(u64), // proposal_id -> GovernanceAction
+    /// ABI version registry — packed (min, current) stored by init_abi.
+    AbiVersions,
 }
 
 #[contracttype]
@@ -112,6 +118,9 @@ impl GovernanceContract {
             .instance()
             .set(&DataKey::PolicyContract, &policy_contract);
         access_control::init_access_control(&env, &admin);
+
+        // Register ABI version so callers can negotiate compatibility.
+        init_abi(&env, GOVERNANCE_V1, GOVERNANCE_V1);
 
         // Canonical, indexed event emission (see stellar_insured_lib::events).
         emit_event_with(&env, symbol_short!("GOV"), symbol_short!("INIT"), &admin);
@@ -530,12 +539,13 @@ impl GovernanceContract {
 
             match action {
                 GovernanceAction::ClaimApproval(claim_id) => {
-                    // Call claims contract to approve the claim
+                    // Call claims contract to approve the claim — with ABI guard.
                     let claims_contract: Address = env
                         .storage()
                         .instance()
                         .get(&DataKey::ClaimsContract)
                         .ok_or(GovernanceError::ClaimsContractNotSet)?;
+                    check_abi(&env, &claims_contract, CLAIMS_V1);
                     env.invoke_contract::<()>(
                         &claims_contract,
                         &symbol_short!("approve"),
@@ -543,12 +553,13 @@ impl GovernanceContract {
                     );
                 }
                 GovernanceAction::FundAllocation(recipient, amount) => {
-                    // Call risk pool to allocate funds
+                    // Call risk pool to allocate funds — with ABI guard.
                     let risk_pool: Address = env
                         .storage()
                         .instance()
                         .get(&DataKey::RiskPoolContract)
                         .ok_or(GovernanceError::RiskPoolContractNotSet)?;
+                    check_abi(&env, &risk_pool, RISK_POOL_V1);
                     env.invoke_contract::<()>(
                         &risk_pool,
                         &symbol_short!("payout"),
@@ -556,13 +567,13 @@ impl GovernanceContract {
                     );
                 }
                 GovernanceAction::PolicyChange(policy_id, patch) => {
-                    // #609: apply the DAO-approved patch through the policy
-                    // contract's governance-gated entry point.
+                    // Apply the DAO-approved patch — with ABI guard.
                     let policy_contract: Address = env
                         .storage()
                         .instance()
                         .get(&DataKey::PolicyContract)
                         .ok_or(GovernanceError::PolicyContractNotSet)?;
+                    check_abi(&env, &policy_contract, POLICY_V1);
                     env.invoke_contract::<()>(
                         &policy_contract,
                         &Symbol::new(&env, "apply_governance_update"),
@@ -570,13 +581,13 @@ impl GovernanceContract {
                     );
                 }
                 GovernanceAction::Slashing(target, role, amount) => {
-                    // #601: end-to-end slashing pipeline.
-                    // 1. Slash the target's stake via the slashing contract.
+                    // 1. Slash the target via the slashing contract — with ABI guard.
                     let slashing_contract: Address = env
                         .storage()
                         .instance()
                         .get(&DataKey::SlashingContract)
                         .ok_or(GovernanceError::SlashingContractNotSet)?;
+                    check_abi(&env, &slashing_contract, SLASHING_V1);
                     let reason = String::from_str(&env, "governance_slash");
                     env.invoke_contract::<()>(
                         &slashing_contract,
@@ -590,13 +601,13 @@ impl GovernanceContract {
                         ],
                     );
 
-                    // 2. Route the slashed stake to the risk pool (mirrors the
-                    //    oracle's slash_source -> risk_pool transfer).
+                    // 2. Route the slashed stake to the risk pool — with ABI guard.
                     let risk_pool: Address = env
                         .storage()
                         .instance()
                         .get(&DataKey::RiskPoolContract)
                         .ok_or(GovernanceError::RiskPoolContractNotSet)?;
+                    check_abi(&env, &risk_pool, RISK_POOL_V1);
                     env.invoke_contract::<()>(
                         &risk_pool,
                         &Symbol::new(&env, "absorb_slash"),
@@ -616,6 +627,9 @@ impl GovernanceContract {
                     );
                 }
                 GovernanceAction::PauseContract(target_contract, duration_seconds) => {
+                    // No ABI guard here — any circuit-breaker-compatible
+                    // contract exposes `pause`; governance trusts its own
+                    // stored target address.
                     env.invoke_contract::<()>(
                         &target_contract,
                         &Symbol::new(&env, "pause"),
@@ -663,6 +677,11 @@ impl GovernanceContract {
 
     pub fn get_state_root(env: Env) -> soroban_sdk::BytesN<32> {
         get_state_root(&env)
+    }
+
+    /// Return the `(min_packed, current_packed)` ABI version range.
+    pub fn get_supported_abis(env: Env) -> (u32, u32) {
+        read_own_abi(&env)
     }
 
     pub fn get_active_proposals(env: Env) -> Vec<u64> {

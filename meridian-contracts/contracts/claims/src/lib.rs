@@ -1,6 +1,9 @@
 #![no_std]
 
+mod abi;
+
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, IntoVal};
+use stellar_insured_lib::abi_dispatch::{init_abi, CLAIMS_V1};
 use stellar_insured_lib::access_control::{self, AccessControlRole};
 use stellar_insured_lib::events::emit_event_with;
 use stellar_insured_lib::state_root::get_state_root;
@@ -18,6 +21,8 @@ pub enum DataKey {
     /// (Submitted / UnderReview / Approved). Cleared on Rejected or Settled.
     PolicyActiveClaim(u64),
     SettlingClaim(Address),
+    /// ABI version registry (min, current) packed as u32.
+    AbiVersions,
 }
 
 // --- Storage helpers (#378: data access abstraction) ---
@@ -63,6 +68,8 @@ impl ClaimsContract {
         env.storage().instance().set(&DataKey::RiskPool, &risk_pool);
         env.storage().instance().set(&DataKey::ClaimCounter, &0u64);
         access_control::init_access_control(&env, &admin);
+        // Register ABI version so callers can negotiate compatibility.
+        init_abi(&env, CLAIMS_V1, CLAIMS_V1);
     }
 
     pub fn set_role(env: Env, addr: Address, role: AccessControlRole) {
@@ -76,21 +83,29 @@ impl ClaimsContract {
             .instance()
             .get(&DataKey::PolicyContract)
             .unwrap();
-        // #407: Centralized validation via Policy contract (includes expiration check)
-        let is_active: bool = env.invoke_contract(
-            &policy_contract,
-            &symbol_short!("is_active"),
-            soroban_sdk::vec![&env, policy_id.into_val(&env)],
-        );
+        // #407: Centralized validation via Policy contract — use versioned
+        // dispatch so an upgraded Policy contract is detected before the call.
+        use stellar_insured_lib::abi_dispatch::{check_abi, POLICY_V1};
+        let is_active: bool = {
+            check_abi(&env, &policy_contract, POLICY_V1);
+            env.invoke_contract(
+                &policy_contract,
+                &symbol_short!("is_active"),
+                soroban_sdk::vec![&env, policy_id.into_val(&env)],
+            )
+        };
         if !is_active {
             panic!("Policy is not active or has expired");
         }
 
-        let policy: InsurancePolicy = env.invoke_contract(
-            &policy_contract,
-            &symbol_short!("get_pol"),
-            soroban_sdk::vec![&env, policy_id.into_val(&env)],
-        );
+        let policy: InsurancePolicy = {
+            check_abi(&env, &policy_contract, POLICY_V1);
+            env.invoke_contract(
+                &policy_contract,
+                &symbol_short!("get_pol"),
+                soroban_sdk::vec![&env, policy_id.into_val(&env)],
+            )
+        };
 
         // Consistency check: claim amount must not exceed coverage
         if amount <= 0 || (amount + policy.total_claimed) > policy.coverage_amount {
@@ -219,46 +234,54 @@ impl ClaimsContract {
         // #410: Check risk pool balance before payout
         let risk_pool: Address = env.storage().instance().get(&DataKey::RiskPool).unwrap();
 
-        // Get pool stats to verify available capital
-        let pool_stats: PoolStats = env.invoke_contract(
-            &risk_pool,
-            &symbol_short!("get_stats"),
-            soroban_sdk::Vec::new(&env),
-        );
+        // Get pool stats to verify available capital — versioned dispatch.
+        use stellar_insured_lib::abi_dispatch::{check_abi, POLICY_V1, RISK_POOL_V1};
+        let pool_stats: PoolStats = {
+            check_abi(&env, &risk_pool, RISK_POOL_V1);
+            env.invoke_contract(
+                &risk_pool,
+                &symbol_short!("get_stats"),
+                soroban_sdk::Vec::new(&env),
+            )
+        };
 
         if pool_stats.available_capital < claim.amount {
             panic!("Insufficient risk pool funds for payout");
         }
 
-        // Cross-contract call to Risk Pool to payout
-        // payout_claim(recipient, amount)
+        // Cross-contract call to Risk Pool to payout — versioned dispatch.
         let risk_pool: Address = env.storage().instance().get(&DataKey::RiskPool).unwrap();
+        {
+            check_abi(&env, &risk_pool, RISK_POOL_V1);
+            env.invoke_contract::<()>(
+                &risk_pool,
+                &symbol_short!("payout"),
+                soroban_sdk::vec![
+                    &env,
+                    claim.claimant.clone().into_val(&env),
+                    claim.amount.into_val(&env)
+                ],
+            );
+        }
 
-        env.invoke_contract::<()>(
-            &risk_pool,
-            &symbol_short!("payout"),
-            soroban_sdk::vec![
-                &env,
-                claim.claimant.clone().into_val(&env),
-                claim.amount.into_val(&env)
-            ],
-        );
-
-        // Update total claimed in policy contract
+        // Update total claimed in policy contract — versioned dispatch.
         let policy_contract: Address = env
             .storage()
             .instance()
             .get(&DataKey::PolicyContract)
             .unwrap();
-        env.invoke_contract::<()>(
-            &policy_contract,
-            &symbol_short!("update_cl"),
-            soroban_sdk::vec![
-                &env,
-                claim.policy_id.into_val(&env),
-                claim.amount.into_val(&env)
-            ],
-        );
+        {
+            check_abi(&env, &policy_contract, POLICY_V1);
+            env.invoke_contract::<()>(
+                &policy_contract,
+                &symbol_short!("update_cl"),
+                soroban_sdk::vec![
+                    &env,
+                    claim.policy_id.into_val(&env),
+                    claim.amount.into_val(&env)
+                ],
+            );
+        }
 
         claim.status = ClaimStatus::Settled;
         set_claim(&env, claim_id, &claim);
@@ -380,6 +403,15 @@ impl ClaimsContract {
 
     pub fn get_stats(env: Env) -> u64 {
         get_claim_counter(&env)
+    }
+
+    /// Return the `(min_packed, current_packed)` ABI version range.
+    ///
+    /// Called by other contracts via `check_abi` / `get_supported_abis` before
+    /// making a cross-contract invocation so they can detect version mismatches
+    /// instead of calling mismatched entry points silently.
+    pub fn get_supported_abis(env: Env) -> (u32, u32) {
+        stellar_insured_lib::abi_dispatch::read_own_abi(&env)
     }
 }
 

@@ -105,6 +105,24 @@ pub enum OracleError {
     NotInitialized = 2,
 }
 
+/// ABI versioning errors – raised when a caller's declared ABI version is
+/// incompatible with the callee's supported range.
+///
+/// The stable `u32` discriminant (100) is chosen to leave plenty of headroom
+/// above the existing error families so it never collides with them.
+#[cfg(feature = "soroban")]
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum AbiError {
+    /// The caller requested an ABI version the callee does not support.
+    AbiVersionMismatch = 1,
+    /// The contract's ABI version registry has not been initialised yet.
+    AbiNotInitialized = 2,
+    /// The ABI version supplied is outside the valid numeric range.
+    InvalidAbiVersion = 3,
+}
+
 /// Common validation errors shared across contracts
 #[cfg(feature = "soroban")]
 #[contracterror]
@@ -139,6 +157,14 @@ pub enum ValidationError {
     InvalidEnumRange = 13,
     /// Cross-field constraint failed
     CrossFieldConstraint = 14,
+}
+
+#[cfg(feature = "ink")]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, scale::Encode, scale::Decode)]
+pub enum AbiError {
+    AbiVersionMismatch,
+    AbiNotInitialized,
+    InvalidAbiVersion,
 }
 
 #[cfg(feature = "ink")]
