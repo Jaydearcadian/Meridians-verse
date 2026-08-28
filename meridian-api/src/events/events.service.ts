@@ -1,13 +1,14 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan, FindOptionsWhere } from 'typeorm';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, createHmac, randomBytes } from 'crypto';
 import { AuditLog, AuditAction } from '../audit/audit-log.entity';
 import { AuditService } from '../audit/audit.service';
 import { Webhook } from './webhook.entity';
 import { LeaderboardProofService } from '../leaderboard/leaderboard-proof.service';
 import { CryptoProvider } from 'src/crypto/providers/crypto.provider';
 import { CorrelationIdStore } from '../common/correlation/correlation-id.store';
+import { CORRELATION_ID_RESPONSE_HEADER } from '../common/correlation/correlation-id.constants';
 import { WebhookQueueService } from './webhook-queue.service';
 
 export interface ContractEvent {

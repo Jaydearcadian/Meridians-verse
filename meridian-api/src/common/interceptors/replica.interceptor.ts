@@ -57,11 +57,13 @@ export class ReplicaInterceptor implements NestInterceptor {
     const forceReplica = Reflect.getMetadata('USE_REPLICA', handler);
     const forceMaster = Reflect.getMetadata('USE_MASTER', handler);
 
-    // Store routing decision in request for downstream use
+    // Store routing decision in request for downstream use. Decorator
+    // metadata is undefined when unset; normalise to explicit booleans so
+    // consumers can rely on the shape (issue #665 baseline repair).
     request.replicaRouting = {
-      useReplica: this.hasReplica && (forceReplica || !forceMaster),
-      forceReplica,
-      forceMaster,
+      useReplica: Boolean(this.hasReplica && (forceReplica || !forceMaster)),
+      forceReplica: forceReplica === true,
+      forceMaster: forceMaster === true,
     };
 
     if (this.hasReplica) {

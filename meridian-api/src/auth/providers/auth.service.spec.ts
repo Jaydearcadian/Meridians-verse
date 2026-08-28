@@ -4,6 +4,7 @@ jest.mock('src/users/user.entity', () => ({ User: class User {} }), {
 
 import { UnauthorizedException } from '@nestjs/common';
 import { AuthService } from './auth.service';
+import { SessionService } from './session.service';
 
 describe('AuthService - email verification (issue #435)', () => {
   let service: AuthService;
@@ -32,6 +33,12 @@ describe('AuthService - email verification (issue #435)', () => {
       signInProviders as any,
       refreshTokenProvider as any,
       verifyEmailProvider as any,
+      { unlock: jest.fn() } as any,
+      {
+        listActiveSessions: jest.fn(async () => []),
+        revokeSession: jest.fn(async () => undefined),
+        enforceSessionLimit: jest.fn(async () => []),
+      } as any,
       usersRepository as any,
     );
   });

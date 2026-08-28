@@ -20,6 +20,7 @@ jest.mock('../dto/refresh-token-dto', () => ({}), { virtual: true });
 
 import { UnauthorizedException } from '@nestjs/common';
 import { RefreshTokenProvider } from './refreshToken.provider';
+import { SessionService } from './session.service';
 
 describe('RefreshTokenProvider', () => {
   let provider: RefreshTokenProvider;
@@ -101,6 +102,11 @@ describe('RefreshTokenProvider', () => {
       hashingProvider as any,
       generateTokenProvider as any,
       cryptoProvider as any,
+      {
+        enforceSessionLimit: jest.fn(async () => []),
+        listActiveSessions: jest.fn(async () => []),
+        revokeSession: jest.fn(async () => undefined),
+      } as any,
     );
   });
 

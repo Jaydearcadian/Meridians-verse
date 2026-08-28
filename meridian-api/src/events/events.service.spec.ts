@@ -7,6 +7,7 @@ import { EventsService, RpcProvider, ContractEvent } from './events.service';
 import { Webhook } from './webhook.entity';
 import { LeaderboardProofService } from '../leaderboard/leaderboard-proof.service';
 import { CryptoProvider } from '../crypto/providers/crypto.provider';
+import { WebhookQueueService } from './webhook-queue.service';
 
 describe('EventsService', () => {
   let service: EventsService;
@@ -57,7 +58,7 @@ describe('EventsService', () => {
       create: jest.fn().mockReturnValue({}),
       save: jest.fn().mockImplementation((e) => Promise.resolve(e)),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
-    };
+    } as any;
 
     mockLeaderboardService = {
       extractContribution: jest.fn().mockReturnValue({ address: null, xp: 0 }),
@@ -83,6 +84,14 @@ describe('EventsService', () => {
           provide: require('../common/correlation/correlation-id.store')
             .CorrelationIdStore,
           useValue: { get: () => 'test-correlation', run: (_id: string, fn: () => unknown) => fn() },
+        },
+        // WebhookQueueService dependency (issue #663) — stubbed for unit tests.
+        {
+          provide: WebhookQueueService,
+          useValue: {
+            enqueue: jest.fn().mockResolvedValue(undefined),
+            enqueueAll: jest.fn().mockResolvedValue([]),
+          } as unknown as WebhookQueueService,
         },
       ],
     }).compile();
@@ -245,8 +254,8 @@ describe('EventsService', () => {
     });
 
     it('encrypts the secret at rest and returns the plaintext once (issue #631)', async () => {
-      mockWebhookRepo.create.mockImplementation((entity) => entity);
-      mockWebhookRepo.save.mockImplementation((entity) =>
+      (mockWebhookRepo.create as jest.Mock).mockImplementation((entity) => entity);
+      (mockWebhookRepo.save as jest.Mock).mockImplementation((entity) =>
         Promise.resolve({ id: 'wh-1', ...entity }),
       );
 

@@ -1,6 +1,8 @@
 import {
   Body,
   Controller,
+  Delete,
+  Get,
   HttpCode,
   HttpStatus,
   Logger,
@@ -69,11 +71,23 @@ export class AuthController {
     description: 'Unauthorized / Invalid refresh token',
   })
   public async refreshToken(
-    @Body() refreshTokenDto: RefreshTokenDto,
+    @Body() refreshTokenDto: RefreshTokenDto & { deviceName?: string },
     @Req() req: Request,
   ) {
     const userAgent = req.get('user-agent') ?? undefined;
-    return this.authService.RefreshToken(refreshTokenDto, userAgent);
+    // Device tracking (issue #665): prefer the client-declared device name,
+    // then the x-device-name header; IP comes from the socket.
+    const bodyDevice =
+      (refreshTokenDto as { deviceName?: string }).deviceName ?? undefined;
+    const headerDevice = req.get('x-device-name') ?? undefined;
+    const ip = req.ip ?? req.socket?.remoteAddress ?? undefined;
+    return this.authService.RefreshToken(
+      refreshTokenDto,
+      userAgent,
+      bodyDevice ?? headerDevice,
+      ip,
+      undefined,
+    );
   }
 
   @Post('/logout')
@@ -110,6 +124,42 @@ export class AuthController {
     }
 
     return this.authService.logoutAll(userId);
+  }
+
+  // --- Self-service session management (issue #665) ---
+
+  @Get('/sessions')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "List the current user's active sessions",
+  })
+  @ApiBearerAuth()
+  @ApiResponse({ status: 200, description: 'Active sessions for the user' })
+  public async listSessions(@Req() req: Request) {
+    const user = req[REQUEST_USER_KEY] as { sub?: string | number };
+    const userId = Number(user?.sub);
+    if (!Number.isFinite(userId)) {
+      throw new Error('Invalid user payload');
+    }
+    return this.authService.listSessions(userId);
+  }
+
+  @Delete('/sessions/:id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Revoke one of your sessions by id' })
+  @ApiBearerAuth()
+  @ApiResponse({ status: 200, description: 'Session revoked successfully' })
+  @ApiResponse({ status: 403, description: 'Session not found or not yours' })
+  public async revokeSession(
+    @Req() req: Request,
+    @Param('id') sessionId: string,
+  ) {
+    const user = req[REQUEST_USER_KEY] as { sub?: string | number };
+    const userId = Number(user?.sub);
+    if (!Number.isFinite(userId)) {
+      throw new Error('Invalid user payload');
+    }
+    return this.authService.revokeSession(userId, sessionId);
   }
 
   @Post('/verify-email')

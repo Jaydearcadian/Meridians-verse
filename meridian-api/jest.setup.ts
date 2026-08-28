@@ -1,3 +1,5 @@
+import 'reflect-metadata';
+
 // Global jest setup: registers virtual mocks for every aliased or relative
 // import path that the meridian-api specs need to short-circuit.
 // These mocks are registered BEFORE any spec file is loaded, so transitive
@@ -64,32 +66,7 @@ jest.mock(
   { virtual: true },
 );
 
-// ----- Auth providers (idempotent stubs; per-spec files override as needed) -----
-jest.mock(
-  'src/auth/providers/hashing',
-  () => ({ HashingProvider: class HashingProvider {} }),
-  { virtual: true },
-);
-jest.mock(
-  'src/auth/providers/sign-in.providers',
-  () => ({ SignInProviders: class SignInProviders {} }),
-  { virtual: true },
-);
-jest.mock(
-  'src/auth/providers/token.provider',
-  () => ({ GenerateTokenProvider: class GenerateTokenProvider {} }),
-  { virtual: true },
-);
-jest.mock(
-  'src/auth/providers/refreshToken.provider',
-  () => ({ RefreshTokenProvider: class RefreshTokenProvider {} }),
-  { virtual: true },
-);
-jest.mock(
-  'src/auth/providers/lockout.service',
-  () => ({ LockoutService: class LockoutService {} }),
-  { virtual: true },
-);
+// ----- Auth providers: real implementations are used; per-spec mocks override as needed -----
 jest.mock(
   'src/auth/exceptions/account-locked.exception',
   () => ({
@@ -168,28 +145,8 @@ jest.mock(
 
 // ----- Services referenced through aliased paths -----
 jest.mock(
-  'src/users/providers/user.services',
-  () => ({ UserService: class UserService {} }),
-  { virtual: true },
-);
-jest.mock(
-  'src/users/providers/user-auth.facade',
-  () => ({ UserAuthFacade: class UserAuthFacade {} }),
-  { virtual: true },
-);
-jest.mock(
   'src/tag/tags.service',
   () => ({ TagsService: class TagsService {} }),
-  { virtual: true },
-);
-jest.mock(
-  'src/post/provider/post.service',
-  () => ({ PostsService: class PostsService {} }),
-  { virtual: true },
-);
-jest.mock(
-  'src/common/pagination/providers/pagination.provider',
-  () => ({ Pagination: class Pagination {} }),
   { virtual: true },
 );
 jest.mock(
