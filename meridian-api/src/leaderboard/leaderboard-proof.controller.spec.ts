@@ -2,13 +2,13 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { LeaderboardController } from './leaderboard-proof.controller';
 import { LeaderboardProofService } from './leaderboard-proof.service';
 
-describe('LeaderboardProofController', () => {
-  let controller: LeaderboardProofController;
+describe('LeaderboardController', () => {
+  let controller: LeaderboardController;
   let service: LeaderboardProofService;
 
   beforeEach(async () => {
     const module = await Test.createTestingModule({
-      controllers: [LeaderboardProofController],
+      controllers: [LeaderboardController],
       providers: [
         {
           provide: LeaderboardProofService,
@@ -18,7 +18,8 @@ describe('LeaderboardProofController', () => {
               epoch: 1,
               root: 'root',
               totalXp: 10,
-              entries: [],
+              // getProof() throws NotFoundException when entries is empty.
+              entries: [{ leaf: 'leaf', proof: [] }],
             }),
             getRankings: jest.fn().mockResolvedValue([]),
           },
@@ -26,7 +27,7 @@ describe('LeaderboardProofController', () => {
       ],
     }).compile();
 
-    controller = module.get(LeaderboardProofController);
+    controller = module.get(LeaderboardController);
     service = module.get(LeaderboardProofService);
   });
 

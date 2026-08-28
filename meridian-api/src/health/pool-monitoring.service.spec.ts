@@ -18,6 +18,12 @@ describe('PoolMonitoringService', () => {
       },
     } as any;
 
+    // The service reads the global prometheus register in its constructor,
+    // so it must be mocked BEFORE the testing module is created.
+    (global as any).prometheusRegister = {
+      registerMetric: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PoolMonitoringService,
@@ -29,11 +35,6 @@ describe('PoolMonitoringService', () => {
     }).compile();
 
     service = module.get<PoolMonitoringService>(PoolMonitoringService);
-
-    // Mock the global prometheus register
-    (global as any).prometheusRegister = {
-      registerMetric: jest.fn(),
-    };
   });
 
   afterEach(() => {
@@ -70,7 +71,7 @@ describe('PoolMonitoringService', () => {
     });
 
     it('should handle missing pool gracefully', () => {
-      mockDataSource.driver.pool = null;
+      (mockDataSource.driver as any).pool = null;
       const metrics = service.getCurrentMetrics();
       expect(metrics).toEqual({
         activeConnections: 0,
@@ -92,7 +93,7 @@ describe('PoolMonitoringService', () => {
     });
 
     it('should calculate saturation correctly with zero total connections', () => {
-      mockDataSource.driver.pool = {
+      (mockDataSource.driver as any).pool = {
         totalCount: 0,
         idleCount: 0,
         waitingCount: 0,
@@ -104,7 +105,7 @@ describe('PoolMonitoringService', () => {
 
   describe('isPoolHealthy', () => {
     it('should return true when waiting connections below threshold', () => {
-      mockDataSource.driver.pool = {
+      (mockDataSource.driver as any).pool = {
         totalCount: 8,
         idleCount: 3,
         waitingCount: 5,
@@ -114,7 +115,7 @@ describe('PoolMonitoringService', () => {
     });
 
     it('should return false when waiting connections exceed threshold', () => {
-      mockDataSource.driver.pool = {
+      (mockDataSource.driver as any).pool = {
         totalCount: 8,
         idleCount: 3,
         waitingCount: 15,
@@ -124,7 +125,7 @@ describe('PoolMonitoringService', () => {
     });
 
     it('should use default threshold of 10', () => {
-      mockDataSource.driver.pool = {
+      (mockDataSource.driver as any).pool = {
         totalCount: 8,
         idleCount: 3,
         waitingCount: 5,
@@ -134,7 +135,7 @@ describe('PoolMonitoringService', () => {
     });
 
     it('should handle missing pool gracefully', () => {
-      mockDataSource.driver.pool = null;
+      (mockDataSource.driver as any).pool = null;
       const isHealthy = service.isPoolHealthy(10);
       expect(isHealthy).toBe(true);
     });
@@ -143,10 +144,10 @@ describe('PoolMonitoringService', () => {
   describe('collectMetrics', () => {
     it('should update Prometheus gauges with pool metrics', async () => {
       const gaugeSetSpy = jest.fn();
-      service['activeConnectionsGauge'] = { set: gaugeSetSpy } as any;
-      service['idleConnectionsGauge'] = { set: gaugeSetSpy } as any;
-      service['waitingConnectionsGauge'] = { set: gaugeSetSpy } as any;
-      service['poolSaturationGauge'] = { set: gaugeSetSpy } as any;
+      (service as any)['activeConnectionsGauge'] = { set: gaugeSetSpy };
+      (service as any)['idleConnectionsGauge'] = { set: gaugeSetSpy };
+      (service as any)['waitingConnectionsGauge'] = { set: gaugeSetSpy };
+      (service as any)['poolSaturationGauge'] = { set: gaugeSetSpy };
 
       await service['collectMetrics']();
 

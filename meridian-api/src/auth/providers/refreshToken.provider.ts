@@ -16,6 +16,7 @@ import { GenerateTokenProvider } from './token.provider';
 import { RefreshToken } from '../entities/refresh-token.entity';
 import { HashingProvider } from './hashing';
 import { CryptoProvider, constantTimeEqual } from 'src/crypto/providers/crypto.provider';
+import { SessionService } from './session.service';
 
 @Injectable()
 export class RefreshTokenProvider {
@@ -43,11 +44,17 @@ export class RefreshTokenProvider {
     // of each refresh token (under the user's DEK) so sessions can be
     // audited/rotated without re-hashing.
     private readonly cryptoProvider: CryptoProvider,
+
+    // Concurrent session management & device tracking (issue #665).
+    private readonly sessionService: SessionService,
   ) {}
 
   public async refreshToken(
     refreshTokendto: RefreshTokenDto,
     userAgent?: string,
+    deviceName?: string,
+    ipAddress?: string,
+    location?: string,
   ) {
     try {
       const payload = await this.jwtService.verifyAsync(
@@ -97,6 +104,15 @@ export class RefreshTokenProvider {
       );
 
       const tokens = await this.generateTokenProvider.generateTokens(user);
+
+      // Device tracking (issue #665): stamp the refreshed session with the
+      // request's device metadata and touch lastUsedAt on use.
+      const now = new Date();
+      await this.refreshTokenRepository.update(
+        { jti, userId: user.id },
+        { lastUsedAt: now },
+      );
+
       const newRefreshToken = await this.refreshTokenRepository.save({
         jti: tokens.jti,
         userId: user.id,
@@ -106,8 +122,17 @@ export class RefreshTokenProvider {
         expiresAt: new Date(Date.now() + this.jwtconfiguration.Rttl * 1000),
         revokedAt: null,
         userAgent: userAgent ?? null,
+        deviceName:
+          (deviceName ?? storedToken.deviceName ?? null) || null,
+        ipAddress: ipAddress ?? storedToken.ipAddress ?? null,
+        location: location ?? storedToken.location ?? null,
+        lastUsedAt: now,
         ...(await this.encryptRefreshToken(tokens.refresh_token, user)),
       });
+
+      // Concurrent-session ceiling (issue #665): evict LRU sessions beyond
+      // MAX_CONCURRENT_SESSIONS after the new session exists.
+      await this.sessionService.enforceSessionLimit(user.id);
 
       return {
         access_token: tokens.access_token,

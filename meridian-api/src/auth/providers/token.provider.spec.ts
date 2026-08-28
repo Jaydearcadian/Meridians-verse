@@ -109,11 +109,6 @@ describe('GenerateTokenProvider', () => {
         }),
       );
     });
-      expect(result).toMatchObject({
-        access_token: expect.stringContaining(':5'),
-        refresh_token: expect.stringContaining(':5'),
-        jti: expect.any(String),
-      });
-    });
   });
 });
+

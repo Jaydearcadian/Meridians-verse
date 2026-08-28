@@ -270,7 +270,13 @@ export class CryptoProvider implements OnModuleInit {
 
     for (const kek of candidates) {
       try {
-        return this.decryptWithKek(Buffer.from(dek.wrappedKey, 'base64'), kek);
+        // wrapWithKek emits a UTF-8 JSON envelope; older rows may hold that
+        // same payload base64-encoded (issue #665 baseline repair). Try
+        // UTF-8 first for envelope-shaped rows, then fall back to base64.
+        const raw = dek.wrappedKey.trimStart().startsWith('{')
+          ? Buffer.from(dek.wrappedKey, 'utf8')
+          : Buffer.from(dek.wrappedKey, 'base64');
+        return this.decryptWithKek(raw, kek);
       } catch {
         // Try the next candidate KEK.
       }

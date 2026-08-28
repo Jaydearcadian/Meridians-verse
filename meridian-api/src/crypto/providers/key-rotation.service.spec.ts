@@ -17,12 +17,19 @@ function buildEnvironment(
   dekRepo: jest.Mocked<Partial<Repository<DataEncryptionKey>>>;
 } {
   const dekRepo = {
-    find: jest.fn(async () => deks.map((d) => ({ ...d }))),
+    // Return the live objects so mutations (kekVersion bump, re-wrap) are
+    // visible to the test's `deks` array, matching real repository behaviour
+    // where saved entities mutate in place.
+    find: jest.fn(async () => deks),
     save: jest.fn(async (entities) => {
       const batch = Array.isArray(entities) ? entities : [entities];
       for (const entity of batch) {
         const index = deks.findIndex((d) => d.id === entity.id);
-        if (index >= 0) deks[index] = entity;
+        if (index >= 0) {
+          deks[index] = entity;
+        } else {
+          deks.push({ id: `dek-${deks.length + 1}`, ...entity } as any);
+        }
       }
       return batch;
     }),
@@ -56,10 +63,10 @@ describe('KeyRotationService (issue #631)', () => {
     const deks: Partial<DataEncryptionKey>[] = [];
     const { rotation, cryptoProvider, dekRepo } = buildEnvironment(deks);
 
-    // Seed 3 DEKs under the current KEK.
+    // Seed 3 DEKs under the current KEK. createDek already persists through
+    // the mocked save(), which appends to `deks`.
     for (let i = 0; i < 3; i++) {
-      const dek = await cryptoProvider.createDek(i + 1);
-      deks.push(dek);
+      await cryptoProvider.createDek(i + 1);
     }
     expect(deks.every((d) => d.kekVersion === 1)).toBe(true);
     const wrappedBefore = deks.map((d) => d.wrappedKey);
@@ -79,11 +86,13 @@ describe('KeyRotationService (issue #631)', () => {
     const deks: Partial<DataEncryptionKey>[] = [];
     const { rotation, cryptoProvider } = buildEnvironment(deks);
 
-    const userDek = await cryptoProvider.createDek(7);
-    deks.push(userDek);
+    const userDek = (await cryptoProvider.createDek(7)) as any;
+    // The mocked repository assigns ids on save(); re-read the stored row so
+    // userDek.id is defined (mirrors a real DB-generated uuid).
+    const stored = deks.find((d) => d.id !== undefined) as any;
 
     const { ciphertext } = await cryptoProvider.encrypt('sensitive-value', {
-      dekId: userDek.id,
+      dekId: stored?.id ?? userDek.id,
     });
 
     // Rotate to a brand-new KEK.
@@ -96,7 +105,7 @@ describe('KeyRotationService (issue #631)', () => {
     );
     // New encryptions use the re-wrapped DEK seamlessly.
     const fresh = await cryptoProvider.encrypt('after-rotation', {
-      dekId: userDek.id,
+      dekId: stored?.id ?? userDek.id,
     });
     await expect(cryptoProvider.decrypt(fresh.ciphertext)).resolves.toBe(
       'after-rotation',

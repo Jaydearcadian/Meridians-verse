@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull, LessThan } from 'typeorm';
 import { createHmac } from 'crypto';
@@ -17,6 +17,8 @@ interface WebhookJob {
   payload: string;
   correlationId: string;
   attempt: number;
+  /** Original contract event, carried so successful delivery can be recorded in the event store (issue #666). */
+  event?: Record<string, unknown>;
 }
 
 /**
@@ -45,6 +47,9 @@ export class WebhookQueueService implements OnModuleInit {
     private readonly cryptoProvider: CryptoProvider,
     private readonly correlationIdStore: CorrelationIdStore,
     private readonly configService: ConfigService,
+    // Event-sourced audit (issue #666): optional so existing test modules
+    // that construct the queue directly keep working.
+    @Optional() private readonly eventPublisher?: any,
   ) {
     this.retryMax = Number(this.configService.get('WEBHOOK_RETRY_MAX') ?? 5);
     this.backoffBaseMs = Number(
@@ -106,6 +111,15 @@ export class WebhookQueueService implements OnModuleInit {
         payload,
         correlationId,
         attempt: 0,
+        event: {
+          txHash: event.txHash,
+          contract: event.contract,
+          action: event.action,
+          blockNumber: event.blockNumber,
+          auditId: auditEntry.id ?? null,
+          chainHash: auditEntry.chainHash ?? null,
+          participantAddress: (event as any).address ?? null,
+        },
       });
     }
   }
@@ -164,6 +178,18 @@ export class WebhookQueueService implements OnModuleInit {
           nextRetryAt: null,
           lastError: null,
         });
+
+        // Event-sourced audit (issue #666): record successful ingestion so
+        // projections can consume it. Only delivered events emit — failures
+        // go to the DLQ and never produce a ContractEventIngested.
+        if (this.eventPublisher) {
+          await this.eventPublisher.publish({
+            eventType: 'contract_event.ingested',
+            aggregateId: `webhook:${job.webhookId}`,
+            payload: { ...(job as any).event ?? {}, webhookId: job.webhookId },
+            metadata: { deliveredAt: new Date().toISOString() },
+          });
+        }
         return;
       }
 

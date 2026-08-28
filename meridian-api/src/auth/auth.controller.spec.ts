@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ExecutionContext, INestApplication } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import * as request from 'supertest';
 
 jest.mock('./providers/auth.service', () => ({
@@ -56,16 +57,21 @@ describe('AuthController (integration)', () => {
     adminUnlock: jest.Mock;
   };
 
-  const buildMockGuard = (userPayload: { sub: number | string } | null) => {
-    return {
-      canActivate: (context: ExecutionContext) => {
+  // Must be a class: Nest only accepts class-based global guards
+  // (APP_GUARD with useValue is silently not invoked). The payload is bound
+  // via a class factory so useClass receives a real injectable class.
+  const buildMockGuardClass = (userPayload: { sub: number | string } | null) => {
+    class MockGuard {
+      canActivate(context: ExecutionContext) {
         const request = context.switchToHttp().getRequest();
         if (userPayload) {
           request[REQUEST_USER_KEY] = userPayload;
         }
         return true;
-      },
-    };
+      }
+    }
+    Object.defineProperty(MockGuard, 'name', { value: 'MockGuard' });
+    return MockGuard;
   };
 
   beforeEach(async () => {
@@ -94,11 +100,17 @@ describe('AuthController (integration)', () => {
           provide: AuthService,
           useValue: authService,
         },
+        {
+          provide: APP_GUARD,
+          useClass: buildMockGuardClass({ sub: 42 }),
+        },
       ],
     })
       .overrideGuard(AccessTokenGuard)
-      .useValue(buildMockGuard({ sub: 42 }))
+      .useValue(buildMockGuardClass({ sub: 42 }))
       .compile();
+
+
 
     app = moduleRef.createNestApplication();
     await app.init();
@@ -137,7 +149,13 @@ describe('AuthController (integration)', () => {
         expect(res.body.access_token).toBe('new-a');
       });
 
-    expect(authService.RefreshToken).toHaveBeenCalledWith(dto, 'jest-suite');
+    expect(authService.RefreshToken).toHaveBeenCalledWith(
+      dto,
+      'jest-suite',
+      undefined,
+      '::ffff:127.0.0.1',
+      undefined,
+    );
   });
 
   it('POST /auth/refresh-token uses undefined when the user-agent header is missing', async () => {
@@ -148,7 +166,13 @@ describe('AuthController (integration)', () => {
       .send(dto)
       .expect(200);
 
-    expect(authService.RefreshToken).toHaveBeenCalledWith(dto, undefined);
+    expect(authService.RefreshToken).toHaveBeenCalledWith(
+      dto,
+      undefined,
+      undefined,
+      '::ffff:127.0.0.1',
+      undefined,
+    );
   });
 
   it('POST /auth/logout forwards the dto', async () => {
@@ -182,8 +206,8 @@ describe('AuthController (integration)', () => {
       controllers: [AuthController],
       providers: [{ provide: AuthService, useValue: authService }],
     })
-      .overrideGuard(AccessTokenGuard)
-      .useValue(buildMockGuard({ sub: 'not-a-number' }))
+      .overrideProvider(APP_GUARD)
+      .useClass(buildMockGuardClass({ sub: 'not-a-number' }))
       .compile();
     app = moduleRef.createNestApplication();
     await app.init();

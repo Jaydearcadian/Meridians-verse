@@ -7,6 +7,7 @@ import { RefreshTokenDto } from '../dto/refresh-token-dto';
 import { RefreshTokenProvider } from './refreshToken.provider';
 import { VerifyEmailProvider } from './verify-email.provider';
 import { LockoutService } from './lockout.service';
+import { SessionService, SessionView } from './session.service';
 import { User } from 'src/users/user.entity';
 
 @Injectable()
@@ -25,6 +26,9 @@ export class AuthService {
 
     // Account lockout (issue #650): used by admin unlock endpoint.
     private readonly lockoutService: LockoutService,
+
+    // Concurrent session management & device tracking (issue #665).
+    private readonly sessionService: SessionService,
 
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
@@ -78,10 +82,16 @@ export class AuthService {
   public async RefreshToken(
     refreshTokendto: RefreshTokenDto,
     userAgent?: string,
+    deviceName?: string,
+    ipAddress?: string,
+    location?: string,
   ) {
     return await this.refreshTokenProvider.refreshToken(
       refreshTokendto,
       userAgent,
+      deviceName,
+      ipAddress,
+      location,
     );
   }
 
@@ -102,6 +112,20 @@ export class AuthService {
   public async adminUnlock(userId: number): Promise<{ message: string }> {
     await this.lockoutService.adminUnlock(userId);
     return { message: 'Account unlocked successfully' };
+  }
+
+  // --- Self-service session management (issue #665) ---
+
+  public async listSessions(userId: number): Promise<SessionView[]> {
+    return this.sessionService.listActiveSessions(userId);
+  }
+
+  public async revokeSession(
+    userId: number,
+    sessionId: string,
+  ): Promise<{ message: string }> {
+    await this.sessionService.revokeSession(userId, sessionId);
+    return { message: 'Session revoked successfully' };
   }
 
   /**

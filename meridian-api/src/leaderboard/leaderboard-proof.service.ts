@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull } from 'typeorm';
 import { AuditLog, AuditAction } from '../audit/audit-log.entity';
@@ -28,6 +28,8 @@ export class LeaderboardProofService {
     @InjectRepository(AuditLog)
     private readonly auditRepo: Repository<AuditLog>,
     private readonly correlationIdStore: CorrelationIdStore,
+    // Event-sourced read model (issue #666); optional for legacy test modules.
+    @Optional() private readonly leaderboardProjection?: any,
   ) {}
 
   private logWithCorrelation(message: string, extra: Record<string, unknown> = {}): void {
@@ -93,24 +95,31 @@ export class LeaderboardProofService {
       return null;
     }
 
-    const participantEntries = await this.auditRepo.find({
-      where: {
-        action: AuditAction.CONTRACT_EVENT,
-        epochNumber: epoch,
-        participantAddress: address,
-        chainHash: Not(IsNull()),
-      },
-      order: { id: 'ASC' },
-    });
-
-    const allEntries = await this.auditRepo.find({
-      where: {
-        action: AuditAction.CONTRACT_EVENT,
-        epochNumber: epoch,
-        chainHash: Not(IsNull()),
-      },
-      order: { id: 'ASC' },
-    });
+    let participantEntries;
+    let allEntries;
+    if (this.leaderboardProjection) {
+      // Event-sourced path (issue #666): read from the projection.
+      participantEntries = this.leaderboardProjection.getEntriesFor(address, epoch);
+      allEntries = this.leaderboardProjection.getAllEntries(epoch);
+    } else {
+      participantEntries = await this.auditRepo.find({
+        where: {
+          action: AuditAction.CONTRACT_EVENT,
+          epochNumber: epoch,
+          participantAddress: address,
+          chainHash: Not(IsNull()),
+        },
+        order: { id: 'ASC' },
+      });
+      allEntries = await this.auditRepo.find({
+        where: {
+          action: AuditAction.CONTRACT_EVENT,
+          epochNumber: epoch,
+          chainHash: Not(IsNull()),
+        },
+        order: { id: 'ASC' },
+      });
+    }
 
     const leaves = allEntries
       .map((e) => e.chainHash as string)

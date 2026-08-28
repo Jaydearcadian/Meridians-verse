@@ -11,6 +11,7 @@ import jwtConfig from './config/jwt.config';
 import { JwtModule } from '@nestjs/jwt';
 import { GenerateTokenProvider } from './providers/token.provider';
 import { RefreshTokenProvider } from './providers/refreshToken.provider';
+import { SessionService } from './providers/session.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { VerifyEmailProvider } from './providers/verify-email.provider';
@@ -39,6 +40,7 @@ import { MailModule } from 'src/mail/mail.module';
     AuthService,
     GenerateTokenProvider,
     RefreshTokenProvider,
+    SessionService,
     { provide: HashingProvider, useClass: BcryptProvider },
     SignInProviders,
     LockoutService,

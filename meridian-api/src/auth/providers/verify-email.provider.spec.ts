@@ -139,6 +139,7 @@ describe('VerifyEmailProvider (issue #435)', () => {
         emailVerificationToken: null,
         emailVerificationExpires: null,
         encryptedData: null,
+        role: 'verified_user',
       });
     });
 
@@ -163,6 +164,7 @@ describe('VerifyEmailProvider (issue #435)', () => {
         emailVerificationToken: null,
         emailVerificationExpires: null,
         encryptedData: null,
+        role: 'verified_user',
       });
     });
 
