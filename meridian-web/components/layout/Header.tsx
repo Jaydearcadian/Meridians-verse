@@ -36,8 +36,8 @@ export function Header() {
           {/* CTA - Desktop */}
           <div className="hidden md:flex items-center gap-3">
             <ThemeToggle />
-            <button className="px-6 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">Sign In</button>
-            <button className="px-6 py-2 text-sm font-medium rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">Get Started</button>
+            <Link href="/auth/sign-in" className="px-6 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">Sign In</Link>
+            <Link href="/auth/register" className="px-6 py-2 text-sm font-medium rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">Get Started</Link>
           </div>
 
           {/* Accessible Mobile Menu Wrapper via Radix Dialog */}
@@ -70,7 +70,7 @@ export function Header() {
                     <ThemeToggle />
                   </div>
                   <div className="pt-2">
-                    <button className="w-full px-4 py-2 text-sm font-medium rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">Get Started</button>
+                    <Link href="/auth/register" onClick={() => setIsOpen(false)} className="block w-full px-4 py-2 text-center text-sm font-medium rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">Get Started</Link>
                   </div>
                 </nav>
               </Dialog.Content>
