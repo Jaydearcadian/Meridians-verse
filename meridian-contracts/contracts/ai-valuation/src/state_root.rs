@@ -7,6 +7,7 @@ pub fn compute_root(entries: &[Vec<u8>]) -> StateRoot {
     let mut level = entries.iter().map(hash).collect::<Vec<_>>();
     while level.len() > 1 {
         let mut next = Vec::new();
+  
         for pair in level.chunks(2) {
             let mut input = Vec::with_capacity(64);
             input.extend_from_slice(&pair[0]);
@@ -23,3 +24,6 @@ fn hash(value: &[u8]) -> StateRoot {
     ink::env::hash_bytes::<ink::env::hash::Blake2x256>(value, &mut output);
     output
 }
+
+
+
