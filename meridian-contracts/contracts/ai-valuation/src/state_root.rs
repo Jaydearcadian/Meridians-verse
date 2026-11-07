@@ -24,3 +24,6 @@ fn hash(value: &[u8]) -> StateRoot {
     ink::env::hash_bytes::<ink::env::hash::Blake2x256>(value, &mut output);
     output
 }
+
+
+
