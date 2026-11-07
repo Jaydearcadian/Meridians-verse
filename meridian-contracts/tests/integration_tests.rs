@@ -1007,3 +1007,6 @@ mod batch_atomicity_tests {
         assert_eq!(meter.batch_savings(&env, 0), 0);
     }
 }
+
+
+
