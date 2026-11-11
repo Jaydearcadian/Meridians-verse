@@ -27,10 +27,11 @@ export function Header() {
 
           {/* Navigation - Desktop */}
           <nav className="hidden md:flex items-center gap-8">
-            <Link href="#focus" aria-current={isActive('focus') ? 'page' : undefined} className={baseNavClassName}>Focus</Link>
-            <Link href="#stream" aria-current={isActive('stream') ? 'page' : undefined} className={baseNavClassName}>Stream</Link>
-            <Link href="#pool" aria-current={isActive('pool') ? 'page' : undefined} className={baseNavClassName}>Pool</Link>
-            <Link href="#features" aria-current={isActive('features') ? 'page' : undefined} className={baseNavClassName}>Features</Link>
+            <Link href="/#focus" aria-current={isActive('focus') ? 'page' : undefined} className={baseNavClassName}>Focus</Link>
+            <Link href="/#stream" aria-current={isActive('stream') ? 'page' : undefined} className={baseNavClassName}>Stream</Link>
+            <Link href="/#pool" aria-current={isActive('pool') ? 'page' : undefined} className={baseNavClassName}>Pool</Link>
+            <Link href="/#features" aria-current={isActive('features') ? 'page' : undefined} className={baseNavClassName}>Features</Link>
+            <Link href="/community" className={baseNavClassName}>Community</Link>
           </nav>
 
           {/* CTA - Desktop */}
@@ -60,10 +61,11 @@ export function Header() {
                 <Dialog.Description className="sr-only">Access site sections and system configuration links.</Dialog.Description>
                 
                 <nav className="space-y-2">
-                  <Link href="#focus" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => setIsOpen(false)}>Focus</Link>
-                  <Link href="#stream" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => setIsOpen(false)}>Stream</Link>
-                  <Link href="#pool" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => setIsOpen(false)}>Pool</Link>
-                  <Link href="#features" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => setIsOpen(false)}>Features</Link>
+                  <Link href="/#focus" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => setIsOpen(false)}>Focus</Link>
+                  <Link href="/#stream" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => setIsOpen(false)}>Stream</Link>
+                  <Link href="/#pool" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => setIsOpen(false)}>Pool</Link>
+                  <Link href="/#features" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => setIsOpen(false)}>Features</Link>
+                  <Link href="/community" className="block px-4 py-2 text-sm font-medium text-foreground hover:text-primary transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => setIsOpen(false)}>Community</Link>
                   
                   <div className="flex items-center justify-between gap-2 px-4 pt-2 border-t border-border/50">
                     <span className="text-xs uppercase tracking-wide text-muted-foreground">Theme</span>

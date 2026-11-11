@@ -75,8 +75,7 @@ export function isPublishedPost(post: CommunityPost): boolean {
 
 export function normalizeCommunityPosts(payload: unknown): CommunityPostsPage {
   let body: unknown = payload;
-  if (isRecord(body) && 'data' in body) body = body.data;
-  if (isRecord(body) && 'data' in body) body = body.data;
+  if (isRecord(body) && 'apiversion' in body && 'data' in body) body = body.data;
 
   if (Array.isArray(body)) {
     return {
