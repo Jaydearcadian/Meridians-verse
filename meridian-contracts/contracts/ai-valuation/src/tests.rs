@@ -32,6 +32,7 @@ mod tests {
         }
     }
 
+    
     fn create_sample_features() -> PropertyFeatures {
         PropertyFeatures {
             location_score: 750,

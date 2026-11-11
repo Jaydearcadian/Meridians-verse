@@ -41,3 +41,6 @@ pub struct MultiSigConfig {
     pub required_signatures: u32,
     pub signers: Vec<Address>,
 }
+
+
+

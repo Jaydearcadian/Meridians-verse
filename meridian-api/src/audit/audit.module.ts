@@ -5,6 +5,8 @@ import { AuditService } from './audit.service';
 import { CorrelationModule } from '../common/correlation/correlation.module';
 import { AuditEventsModule } from 'src/audit-events/audit-events.module';
 
+
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([AuditLog]),

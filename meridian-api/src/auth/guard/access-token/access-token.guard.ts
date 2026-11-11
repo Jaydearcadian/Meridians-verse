@@ -12,6 +12,8 @@ import jwtConfig from 'src/auth/config/jwt.config';
 import { REQUEST_USER_KEY } from 'src/auth/constant/auth-constant';
 import { ActiveUserData } from 'src/auth/interfaces/active-user-data.interface';
 
+
+
 @Injectable()
 export class AccessTokenGuard implements CanActivate {
   constructor(
